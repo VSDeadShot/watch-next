@@ -1,0 +1,67 @@
+# ---- Personal / never commit -------------------------------------------------
+# Working notes, briefs, and the project explainer are for local use only.
+EXPLAINER.md
+watch-tracker-BRIEF.md
+*-BRIEF.md
+notes/
+scratch/
+
+# ---- Real watch-history exports ----------------------------------------------
+# This repo is public. Netflix and Google Takeout exports are personal data and
+# must never be committed. Test fixtures live in backend/tests/fixtures/ and are
+# hand-written + anonymized (see the negated patterns at the bottom).
+*.zip
+ViewingActivity.csv
+NetflixViewingHistory.csv
+watch-history.json
+watch-history.html
+MyActivity.json
+Takeout/
+
+# ---- Secrets -----------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---- Databases ---------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# ---- Node / Next.js ----------------------------------------------------------
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+.eslintcache
+
+# ---- Editors / OS ------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Logs --------------------------------------------------------------------
+*.log
+npm-debug.log*
+
+# ---- Keep test fixtures tracked ---------------------------------------------
+# These are anonymized, hand-written samples, not real exports. They must survive
+# the personal-data rules above.
+!backend/tests/fixtures/
+!backend/tests/fixtures/**
