@@ -90,3 +90,58 @@ class ManualResolutionResponse(BaseModel):
     release_year: int | None = None
     poster_url: str | None = None
     linked_events: int
+
+
+class ProviderResponse(BaseModel):
+    """One streaming service, as a tile in the settings picker."""
+
+    # What an offer names its provider by, and therefore what a subscription is
+    # stored as. Everything else on this model is for a person to look at.
+    short_name: str
+    name: str
+    technical_name: str
+    icon_url: str | None = None
+    monetization_types: list[str] = Field(default_factory=list)
+
+
+class ProviderCatalogueResponse(BaseModel):
+    """Everything the picker can offer, and where it applies.
+
+    The country is on the response rather than assumed by the client because
+    availability means nothing without it, and a picker rendering one country's
+    services against another's subscriptions would be quietly wrong.
+    """
+
+    country: str
+    providers: list[ProviderResponse] = Field(default_factory=list)
+
+
+class ProviderRefreshResponse(BaseModel):
+    """What a catalogue refresh changed.
+
+    ``fetched == 0`` means JustWatch listed nothing and the stored catalogue was
+    kept rather than emptied -- not that the catalogue is now empty.
+    """
+
+    country: str
+    fetched: int
+    added: int
+    updated: int
+    removed: int
+
+
+class SubscriptionsRequest(BaseModel):
+    """The complete set of services the user has. Replaces, never appends.
+
+    An empty list is a valid, meaningful answer -- it is how somebody says they
+    have cancelled everything -- so this deliberately has no minimum length.
+    """
+
+    short_names: list[str] = Field(default_factory=list)
+
+
+class SubscriptionsResponse(BaseModel):
+    """The services the user has, in the form the availability filter uses."""
+
+    country: str
+    short_names: list[str] = Field(default_factory=list)
