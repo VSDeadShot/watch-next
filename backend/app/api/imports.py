@@ -2,19 +2,14 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
-from app.config import Settings, get_settings
+from app.api.deps import SessionDep, SettingsDep
 from app.core.netflix_parser import NetflixExportError
-from app.db import get_db
 from app.schemas import ImportSummaryResponse
 from app.services.importer import SOURCE, import_netflix_export
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
-
-SessionDep = Annotated[Session, Depends(get_db)]
-SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
 @router.post("/netflix", response_model=ImportSummaryResponse)
