@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "sqlalchemy>=2.0",
+    "alembic>=1.14",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "python-multipart>=0.0.12",
@@ -38,6 +39,7 @@ addopts = "-v --tb=short"
 
 [tool.ruff]
 line-length = 100
+extend-exclude = ["alembic/versions"]
 target-version = "py311"
 
 [tool.ruff.lint]

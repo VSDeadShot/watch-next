@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Dialect, create_engine
+from sqlalchemy import DateTime, Dialect, MetaData, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
@@ -19,8 +19,22 @@ engine = create_engine(settings.database_url, connect_args=_connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
+# Without this, SQLAlchemy leaves most constraints unnamed and the database
+# invents a name. A migration then cannot refer to one to drop or alter it --
+# and on SQLite, which rebuilds a table for any change, Alembic refuses outright
+# with "Constraint must have a name". Naming them by rule means every migration
+# can address every constraint on both backends.
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
 class UtcDateTime(TypeDecorator):

@@ -10,6 +10,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -90,4 +91,86 @@ class WatchEvent(Base):
     # marker, so the JustWatch lookup gets the final say.
     title_ambiguous: Mapped[bool] = mapped_column(default=False)
 
+    # Null until resolution runs, and null afterwards for anything the matcher
+    # declined to guess at. Nothing downstream may treat null as "no match" --
+    # it means "not decided", which is a different thing and is fixable.
+    title_id: Mapped[int | None] = mapped_column(ForeignKey("titles.id"), index=True)
+
     import_run: Mapped[ImportRun] = relationship(back_populates="events")
+    catalogue_title: Mapped["Title | None"] = relationship(back_populates="watch_events")
+
+
+class Title(Base):
+    """A catalogue entry, as JustWatch describes it.
+
+    One row per distinct thing, however many viewing sessions point at it.
+    """
+
+    __tablename__ = "titles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    jw_node_id: Mapped[str] = mapped_column(String(128), unique=True)
+
+    object_type: Mapped[str] = mapped_column(String(16))
+    title: Mapped[str] = mapped_column(Text, index=True)
+    release_year: Mapped[int | None] = mapped_column(Integer)
+    runtime_minutes: Mapped[int | None] = mapped_column(Integer)
+    genres: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    imdb_id: Mapped[str | None] = mapped_column(String(32))
+    # Stored even though nothing reads it yet, so adding TMDB later needs no
+    # migration and no re-resolution of the whole library.
+    tmdb_id: Mapped[str | None] = mapped_column(String(32))
+    poster_url: Mapped[str | None] = mapped_column(Text)
+
+    imdb_score: Mapped[float | None] = mapped_column(Float)
+    tmdb_score: Mapped[float | None] = mapped_column(Float)
+    tomatometer: Mapped[int | None] = mapped_column(Integer)
+
+    # JustWatch is an unofficial API whose answers change; this says how stale
+    # this row is.
+    fetched_at: Mapped[datetime] = mapped_column(UtcDateTime, server_default=func.now())
+
+    watch_events: Mapped[list[WatchEvent]] = relationship(back_populates="catalogue_title")
+
+
+class TitleResolution(Base):
+    """The answer to "what is this string?", cached and kept auditable.
+
+    Keyed by the normalised title rather than by the row, because a hundred
+    episodes of one show ask the same question and the API should be asked once.
+
+    A row exists even when nothing was matched. That is the point: an unresolved
+    answer records the candidates that were rejected, so the UI can offer them
+    for a one-click manual fix instead of silently showing nothing.
+    """
+
+    __tablename__ = "title_resolutions"
+    __table_args__ = (
+        # The kind is part of the key: "Fargo" the film and "Fargo" the series
+        # are the same string and different answers.
+        UniqueConstraint("user_id", "query_key", "kind", name="uq_title_resolutions_query"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), default=DEFAULT_USER_ID)
+
+    query_key: Mapped[str] = mapped_column(Text)
+    kind: Mapped[TitleKind] = mapped_column(String(16))
+    # The title as exported, kept only so the fixer UI can show something a
+    # person recognises. query_key is normalised past readability.
+    query_title: Mapped[str] = mapped_column(Text)
+
+    title_id: Mapped[int | None] = mapped_column(ForeignKey("titles.id"))
+    method: Mapped[str] = mapped_column(String(16))
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Everything the matcher weighed, best first, including whatever it rejected.
+    # This is what a person picks from.
+    candidates: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    # Why nothing was chosen, in plain language, for the fixer UI to show.
+    reason: Mapped[str] = mapped_column(Text, default="")
+
+    resolved_at: Mapped[datetime] = mapped_column(UtcDateTime, server_default=func.now())
+
+    title: Mapped[Title | None] = relationship()
