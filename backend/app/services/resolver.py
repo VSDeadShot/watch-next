@@ -36,6 +36,7 @@ from app.core.normalize import normalize_title
 from app.core.title_parser import TitleKind
 from app.models import DEFAULT_USER_ID, Title, TitleResolution, WatchEvent
 from app.services.justwatch_client import CatalogueEntry, CatalogueLookup, CatalogueSearch
+from app.services.offers import store_offers
 
 _log = logging.getLogger(__name__)
 
@@ -117,7 +118,13 @@ def resolve_library(
             continue
 
         result = _match(question, entries)
-        title = _title_for(session, titles, entries, result)
+        entry = _chosen_entry(entries, result)
+        title = _title_for(session, titles, entry)
+        if entry is not None and title is not None:
+            # The search we just made already carried the offers, so availability
+            # is cached here for nothing. Doing it any later would mean asking a
+            # second time for an answer we were handed the first time.
+            store_offers(session, title, entry.offers, country=catalogue.country)
         _record(session, question, result, title, stored, user_id)
         session.flush()
 
@@ -284,9 +291,13 @@ def _title_for_node(session: Session, catalogue: CatalogueLookup, node_id: str) 
     if existing is not None:
         return existing
 
-    title = _new_title(catalogue.details(node_id))
+    entry = catalogue.details(node_id)
+    title = _new_title(entry)
     session.add(title)
     session.flush()
+    # Free, exactly as in the automatic pass: the lookup returned the offers
+    # alongside everything else.
+    store_offers(session, title, entry.offers, country=catalogue.country)
     return title
 
 
@@ -370,17 +381,27 @@ def _titles_by_node(session: Session) -> dict[str, Title]:
     return {title.jw_node_id: title for title in session.scalars(select(Title))}
 
 
+def _chosen_entry(entries: list[CatalogueEntry], result: MatchResult) -> CatalogueEntry | None:
+    """The full search result the matcher settled on, or None if it declined.
+
+    The matcher works on a reduced candidate, so what it returns is not enough
+    to store a title or its offers -- this finds its way back to the entry the
+    candidate came from.
+    """
+    if result.chosen is None:
+        return None
+    return next(entry for entry in entries if entry.node_id == result.chosen.node_id)
+
+
 def _title_for(
     session: Session,
     titles: dict[str, Title],
-    entries: list[CatalogueEntry],
-    result: MatchResult,
+    entry: CatalogueEntry | None,
 ) -> Title | None:
     """The catalogue row for the chosen entry, stored if it is new."""
-    if result.chosen is None:
+    if entry is None:
         return None
 
-    entry = next(e for e in entries if e.node_id == result.chosen.node_id)
     existing = titles.get(entry.node_id)
     if existing is not None:
         return existing

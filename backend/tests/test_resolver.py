@@ -10,14 +10,17 @@ asking twice for the same answer is a defect, and so is asking again for an
 answer a person already gave by hand.
 """
 
+from dataclasses import replace
+
 import pytest
 from simplejustwatchapi.exceptions import JustWatchApiError, JustWatchHttpError
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from app.core.matching import MatchMethod
-from app.models import Title, TitleResolution, WatchEvent
-from app.services.justwatch_client import CatalogueEntry
+from app.models import Offer, Title, TitleResolution, WatchEvent
+from app.services.justwatch_client import CatalogueEntry, OfferEntry
+from app.services.offers import cached_offers
 from app.services.resolver import (
     ResolutionNotFound,
     resolve_library,
@@ -54,7 +57,13 @@ class FakeCatalogue:
     ask" is the behaviour several of these tests are actually about.
     """
 
-    def __init__(self, results: dict | None = None, default: list | None = None):
+    def __init__(
+        self, results: dict | None = None, default: list | None = None, country: str = "IN"
+    ):
+        # Offers arrive with a search, so whatever stores them has to know which
+        # country they describe, and the client that asked is the only honest
+        # source for that.
+        self.country = country
         self.results = results or {}
         self.default = default if default is not None else []
         self.searched: list[str] = []
@@ -74,7 +83,8 @@ class EchoCatalogue:
     every title resolves, so the whole path runs for every question.
     """
 
-    def __init__(self):
+    def __init__(self, country: str = "IN"):
+        self.country = country
         self.searched: list[str] = []
 
     def search(self, title: str, *, object_types=None) -> list[CatalogueEntry]:
@@ -90,7 +100,8 @@ class FakeLookup:
     looks one id up.
     """
 
-    def __init__(self, entries: dict | None = None):
+    def __init__(self, entries: dict | None = None, country: str = "IN"):
+        self.country = country
         self.entries = entries or {}
         self.looked_up: list[str] = []
 
@@ -127,6 +138,20 @@ class TestLinkingTitles:
         assert title.genres == ["act", "scf"]
         assert title.imdb_id == "tt1375666"
         assert title.imdb_score == 8.8
+
+    def test_the_title_stored_is_the_one_the_matcher_chose(self, session: Session, watched):
+        """JustWatch orders results by its own idea of relevance, and the
+        matcher weighs title, kind and year and does not have to agree. Storing
+        the first result rather than the chosen one would produce a confident,
+        audited, entirely wrong match -- the exact failure this app is built to
+        avoid, arrived at through the back door.
+        """
+        watched("Inception")
+        catalogue = FakeCatalogue({"Inception": [THE_OFFICE, INCEPTION]})
+
+        resolve_library(session, catalogue)
+
+        assert session.scalars(select(Title)).one().jw_node_id == "tm1"
 
     def test_the_resolution_is_recorded_with_its_method(self, session: Session, watched):
         watched("Inception")
@@ -662,3 +687,124 @@ class TestFailuresAreContained:
         summary = resolve_library(session, catalogue)
 
         assert summary.resolved == 1
+
+
+class TestAvailabilityIsCachedForFree:
+    """The reason resolution and availability are one step rather than two.
+
+    JustWatch returns where a title plays as part of the search that resolution
+    already has to make. Fetching that again afterwards would double the number
+    of requests a library costs to learn nothing new, so the answer is kept as
+    it arrives.
+    """
+
+    def test_resolving_a_title_stores_where_it_plays(self, session: Session, watched):
+        watched("Inception")
+        catalogue = FakeCatalogue(
+            {"Inception": [replace(INCEPTION, offers=(OfferEntry("nfx", "FLATRATE"),))]}
+        )
+
+        resolve_library(session, catalogue)
+
+        title = session.scalars(select(Title)).one()
+        assert [offer.provider for offer in cached_offers(session, title.id, country="IN")] == [
+            "nfx"
+        ]
+
+    def test_it_costs_no_extra_requests(self, session: Session, watched):
+        """The whole point. One search per distinct title, availability
+        included -- not one search and then a lookup."""
+        watched("Inception")
+        catalogue = FakeCatalogue(
+            {"Inception": [replace(INCEPTION, offers=(OfferEntry("nfx", "FLATRATE"),))]}
+        )
+
+        resolve_library(session, catalogue)
+
+        assert catalogue.searched == ["Inception"]
+
+    def test_the_country_is_the_one_the_client_asked_about(self, session: Session, watched):
+        """Read off the client rather than from settings, so the offers and the
+        request that produced them cannot end up describing different places."""
+        watched("Inception")
+        catalogue = FakeCatalogue(
+            {"Inception": [replace(INCEPTION, offers=(OfferEntry("nfx", "FLATRATE"),))]},
+            country="US",
+        )
+
+        resolve_library(session, catalogue)
+
+        title = session.scalars(select(Title)).one()
+        assert cached_offers(session, title.id, country="US") != []
+        assert cached_offers(session, title.id, country="IN") == []
+
+    def test_a_title_streaming_nowhere_still_records_that_we_asked(self, session: Session, watched):
+        """Otherwise the refresh pass would treat it as never-asked and spend a
+        request on it every single time it ran."""
+        watched("Inception")
+        catalogue = FakeCatalogue({"Inception": [INCEPTION]})
+
+        resolve_library(session, catalogue)
+
+        assert session.scalars(select(Title)).one().offers_fetched_at is not None
+
+    def test_a_refusal_caches_nothing(self, session: Session, watched):
+        """There is no title to hang an offer on, and the offers of a candidate
+        we declined describe something we have not agreed we watched."""
+        watched("Ambiguous")
+        catalogue = FakeCatalogue({"Ambiguous": [DUNE_1984, DUNE_2021]})
+
+        resolve_library(session, catalogue)
+
+        assert session.scalars(select(Offer)).all() == []
+
+    def test_a_cached_resolution_does_not_clear_what_it_knows(self, session: Session, watched):
+        """A second pass answers from the resolution cache without searching, so
+        it has no offers to store -- and must not read that as "nowhere"."""
+        watched("Inception")
+        catalogue = FakeCatalogue(
+            {"Inception": [replace(INCEPTION, offers=(OfferEntry("nfx", "FLATRATE"),))]}
+        )
+        resolve_library(session, catalogue)
+
+        resolve_library(session, catalogue)
+
+        title = session.scalars(select(Title)).one()
+        assert [offer.provider for offer in cached_offers(session, title.id, country="IN")] == [
+            "nfx"
+        ]
+
+    def test_the_offers_stored_are_the_chosen_entry_s(self, session: Session, watched):
+        """Same trap as the title itself, one step further on: caching the first
+        result's offers against the chosen result's title would say a film is on
+        a service that is carrying something else entirely."""
+        watched("Inception")
+        catalogue = FakeCatalogue(
+            {
+                "Inception": [
+                    replace(THE_OFFICE, offers=(OfferEntry("wrong", "FLATRATE"),)),
+                    replace(INCEPTION, offers=(OfferEntry("nfx", "FLATRATE"),)),
+                ]
+            }
+        )
+
+        resolve_library(session, catalogue)
+
+        title = session.scalars(select(Title)).one()
+        assert [offer.provider for offer in cached_offers(session, title.id, country="IN")] == [
+            "nfx"
+        ]
+
+    def test_a_manual_fix_caches_the_offers_it_looked_up(self, session: Session, watched):
+        """The lookup a manual fix makes returns offers too, and there is no
+        reason to throw them away and re-ask for them later."""
+        watched("Ambiguous")
+        resolve_library(session, FakeCatalogue({"Ambiguous": [DUNE_1984, DUNE_2021]}))
+        resolution = session.scalars(select(TitleResolution)).one()
+        lookup = FakeLookup({"tm21": replace(DUNE_2021, offers=(OfferEntry("prv", "FLATRATE"),))})
+
+        fixed = resolve_manually(session, lookup, resolution_id=resolution.id, node_id="tm21")
+
+        assert [
+            offer.provider for offer in cached_offers(session, fixed.title.id, country="IN")
+        ] == ["prv"]

@@ -39,7 +39,12 @@ DUNE_2021 = CatalogueEntry(
 class FakeCatalogue:
     """Search and lookup together, because one dependency serves both routes."""
 
-    def __init__(self, results: dict | None = None, entries: dict | None = None):
+    def __init__(
+        self, results: dict | None = None, entries: dict | None = None, country: str = "IN"
+    ):
+        # Both routes cache offers as they arrive, and an offer without the
+        # country it was fetched for is not an answer to anything.
+        self.country = country
         self.results = results or {}
         self.entries = entries or {}
         self.searched: list[str] = []
