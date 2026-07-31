@@ -19,13 +19,15 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol, TypeVar
 
 import httpx
 from simplejustwatchapi import details as jw_details
+from simplejustwatchapi import providers as jw_providers
 from simplejustwatchapi import search as jw_search
 from simplejustwatchapi.exceptions import JustWatchError, JustWatchHttpError
-from simplejustwatchapi.tuples import MediaEntry
+from simplejustwatchapi.tuples import MediaEntry, Offer, OfferPackage
 
 from app.core.matching import Candidate
 
@@ -64,6 +66,37 @@ class UnusableCatalogueEntry(JustWatchError):
 
 
 @dataclass(frozen=True)
+class OfferEntry:
+    """One way a title can be watched in the client's country.
+
+    ``provider`` is the package's short name (``nfx``, ``prv``) because that is
+    the only field that joins an offer to a subscription; the rest of the
+    package is catalogue data that belongs in the provider table, not repeated
+    on every offer.
+    """
+
+    provider: str
+    monetization: str
+    presentation: str = ""
+    url: str | None = None
+    price_string: str | None = None
+    price_value: float | None = None
+    price_currency: str | None = None
+    available_to: datetime | None = None
+
+
+@dataclass(frozen=True)
+class ProviderEntry:
+    """A streaming service as JustWatch lists it for one country."""
+
+    short_name: str
+    technical_name: str
+    name: str
+    monetization_types: tuple[str, ...] = ()
+    icon_url: str | None = None
+
+
+@dataclass(frozen=True)
 class CatalogueEntry:
     """What JustWatch knows about one title.
 
@@ -83,6 +116,10 @@ class CatalogueEntry:
     imdb_score: float | None = None
     tmdb_score: float | None = None
     tomatometer: int | None = None
+    # Where it can be watched, in the country the client was built for.
+    # JustWatch returns this with the search itself, so resolving a library
+    # fills the availability cache at no extra cost in requests.
+    offers: tuple[OfferEntry, ...] = ()
 
     def as_candidate(self) -> Candidate:
         """The reduced form the matcher works with.
@@ -106,13 +143,19 @@ class CatalogueSearch(Protocol):
     which is what keeps the resolver's tests off the network.
     """
 
+    # Availability is only meaningful per country, and offers are cached as they
+    # arrive with a search, so whoever stores them has to know which country
+    # they describe. Reading it off the client is what stops that answer and the
+    # request that produced it ever disagreeing.
+    country: str
+
     def search(
         self, title: str, *, object_types: Sequence[str] | None = None
     ) -> list[CatalogueEntry]: ...
 
 
 class CatalogueLookup(Protocol):
-    """What a manual fix depends on.
+    """What a manual fix and an availability refresh depend on.
 
     Separate from :class:`CatalogueSearch` rather than bundled with it because
     they have different callers: the resolve pass never looks a title up by id,
@@ -120,7 +163,23 @@ class CatalogueLookup(Protocol):
     the code under test cannot use. ``JustWatchClient`` satisfies both.
     """
 
+    # Same reason as on CatalogueSearch: a lookup returns offers too, and offers
+    # are only meaningful alongside the country they were fetched for.
+    country: str
+
     def details(self, node_id: str) -> CatalogueEntry: ...
+
+
+class CatalogueProviders(Protocol):
+    """What a provider-catalogue refresh depends on.
+
+    Narrow like the others, and for the same reason: refreshing the list of
+    streaming services has no business being able to search for a title.
+    """
+
+    country: str
+
+    def providers(self) -> list[ProviderEntry]: ...
 
 
 class JustWatchClient:
@@ -142,10 +201,15 @@ class JustWatchClient:
         backoff_base: float = BACKOFF_BASE_SECONDS,
         search_fn: Callable[..., list[MediaEntry]] = jw_search,
         details_fn: Callable[..., MediaEntry] = jw_details,
+        providers_fn: Callable[..., list[OfferPackage]] = jw_providers,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._country = country
+        # Public: availability is meaningless without the country it was
+        # fetched for, and the country the offers belong to is definitionally
+        # the one this client asked about. Callers reading it from here rather
+        # than from their own settings cannot disagree with it.
+        self.country = country
         self._language = language
         self._results = results
         self._min_interval = min_interval
@@ -153,6 +217,7 @@ class JustWatchClient:
         self._backoff_base = backoff_base
         self._search_fn = search_fn
         self._details_fn = details_fn
+        self._providers_fn = providers_fn
         self._sleep = sleep
         self._monotonic = monotonic
 
@@ -169,7 +234,7 @@ class JustWatchClient:
         entries = self._call(
             self._search_fn,
             title,
-            country=self._country,
+            country=self.country,
             language=self._language,
             count=self._results,
             best_only=True,
@@ -193,7 +258,7 @@ class JustWatchClient:
         entry = self._call(
             self._details_fn,
             node_id,
-            country=self._country,
+            country=self.country,
             language=self._language,
             best_only=True,
         )
@@ -203,6 +268,16 @@ class JustWatchClient:
                 f"id={entry.entry_id!r} title={entry.title!r}"
             )
         return _to_catalogue_entry(entry)
+
+    def providers(self) -> list[ProviderEntry]:
+        """Every streaming service JustWatch knows about in this country.
+
+        Refreshed occasionally rather than per request: services are added and
+        renamed on the order of months, and this is the list the settings page
+        renders for someone to tick.
+        """
+        packages = self._call(self._providers_fn, self.country)
+        return [_to_provider_entry(package) for package in packages if package.short_name]
 
     def _call(self, request: Callable[..., _Answer], *args, **kwargs) -> _Answer:
         """Make one request, retrying only what a retry could fix."""
@@ -301,6 +376,66 @@ def _usable(entries: list[MediaEntry], query: str) -> list[MediaEntry]:
     return kept
 
 
+def _to_provider_entry(package: OfferPackage) -> ProviderEntry:
+    return ProviderEntry(
+        short_name=package.short_name,
+        technical_name=package.technical_name or "",
+        name=package.name or package.short_name,
+        monetization_types=tuple(kind for kind in (package.monetization_types or ()) if kind),
+        icon_url=package.icon,
+    )
+
+
+def _to_offer_entry(offer: Offer) -> OfferEntry:
+    return OfferEntry(
+        provider=offer.package.short_name,
+        monetization=offer.monetization_type,
+        # Blank rather than null: the offer cache deduplicates on this column,
+        # and SQL does not consider two nulls equal.
+        presentation=offer.presentation_type or "",
+        url=offer.url,
+        price_string=offer.price_string,
+        price_value=offer.price_value,
+        price_currency=offer.price_currency,
+        available_to=_expiry(offer.available_to),
+    )
+
+
+def _usable_offers(offers: list[Offer] | None) -> tuple[OfferEntry, ...]:
+    """Convert the offers worth keeping.
+
+    An offer with no package has no short name, and the short name is the only
+    thing that can match it to a subscription -- so it could never make a title
+    watchable and would only ever be dead weight in the cache.
+    """
+    return tuple(
+        _to_offer_entry(offer)
+        for offer in (offers or ())
+        if offer.package is not None and offer.package.short_name
+    )
+
+
+def _expiry(value: str | None) -> datetime | None:
+    """Read ``available_to``, which arrives as an unparsed string.
+
+    Always aware and always UTC: the timestamp column refuses a naive value
+    outright, so a bare date left unattached would fail at write time, one
+    layer away from the thing that caused it.
+
+    A format we cannot read costs us the expiry, not the offer. Knowing where
+    to watch something is the point; knowing when it leaves is a nicety, and
+    losing a whole search over it would be badly out of proportion.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        _log.warning("could not read an offer expiry date: %r", value)
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 def _to_catalogue_entry(entry: MediaEntry) -> CatalogueEntry:
     """Convert one library result into our own record."""
     scoring = entry.scoring
@@ -323,4 +458,5 @@ def _to_catalogue_entry(entry: MediaEntry) -> CatalogueEntry:
         imdb_score=scoring.imdb_score if scoring else None,
         tmdb_score=scoring.tmdb_score if scoring else None,
         tomatometer=scoring.tomatometer if scoring else None,
+        offers=_usable_offers(entry.offers),
     )

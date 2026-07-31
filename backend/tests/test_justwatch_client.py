@@ -11,10 +11,12 @@ policy decisions, and policy that lives in a tested object is policy you can
 change on purpose.
 """
 
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 from simplejustwatchapi.exceptions import JustWatchApiError, JustWatchError, JustWatchHttpError
-from simplejustwatchapi.tuples import MediaEntry, Scoring
+from simplejustwatchapi.tuples import MediaEntry, Offer, OfferPackage, Scoring
 
 from app.services.justwatch_client import (
     BACKOFF_BASE_SECONDS,
@@ -57,6 +59,53 @@ _MEDIA_ENTRY_DEFAULTS = {
     "season_number": None,
     "episode_number": None,
 }
+
+
+_OFFER_PACKAGE_DEFAULTS = {
+    "id": "cGF8OA==",
+    "package_id": 8,
+    "name": "Netflix",
+    "technical_name": "netflix",
+    "short_name": "nfx",
+    "monetization_types": ["FLATRATE"],
+    "icon": "https://images.justwatch.com/icon/207360008/s100/netflix.png",
+}
+
+_OFFER_DEFAULTS = {
+    "id": "b2Z8dG05MjY0MTpJTjpuZng6ZmxhdHJhdGU6aGQ=",
+    "monetization_type": "FLATRATE",
+    "presentation_type": "HD",
+    "price_string": None,
+    "price_value": None,
+    "price_currency": "INR",
+    "last_change_retail_price_value": None,
+    "type": "STANDARD",
+    "package": None,  # filled in by offer() so the default package is shared
+    "url": "https://www.netflix.com/title/70131314",
+    "element_count": 0,
+    "available_to": None,
+    "deeplink_roku": None,
+    "subtitle_languages": ["en"],
+    "video_technology": [""],
+    "audio_technology": ["_5_POINT_1"],
+    "audio_languages": ["en", "hi"],
+}
+
+
+def offer_package(**overrides) -> OfferPackage:
+    return OfferPackage(**{**_OFFER_PACKAGE_DEFAULTS, **overrides})
+
+
+def offer(**overrides) -> Offer:
+    """One availability row, built from the library's own named tuple.
+
+    ``package`` defaults to Netflix rather than to None; pass ``package=None``
+    explicitly to describe a malformed one.
+    """
+    values = {**_OFFER_DEFAULTS, **overrides}
+    if "package" not in overrides:
+        values["package"] = offer_package()
+    return Offer(**values)
 
 
 def media_entry(**overrides) -> MediaEntry:
@@ -324,6 +373,182 @@ class TestLookingOneTitleUp:
 
         with pytest.raises(JustWatchError):
             client.details("tm12345")
+
+
+class TestOffersOnASearchResult:
+    """Availability arrives with the search, so it costs nothing extra.
+
+    JustWatch returns where a title can be watched in the same response that
+    answers what the title is. Reading it here means resolving a library also
+    fills the availability cache, instead of spending a second request per
+    title to ask a question we were already told the answer to.
+    """
+
+    def test_offers_come_through_with_the_entry(self, clock: FakeClock):
+        client = build_client(RecordingCall([media_entry(offers=[offer()])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert len(entry.offers) == 1
+
+    def test_the_provider_short_name_is_lifted_out_of_the_package(self, clock: FakeClock):
+        """The short name is the only thing that joins an offer to a
+        subscription, and it is buried a level down in the library's shape."""
+        client = build_client(RecordingCall([media_entry(offers=[offer()])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers[0].provider == "nfx"
+        assert entry.offers[0].monetization == "FLATRATE"
+        assert entry.offers[0].presentation == "HD"
+
+    def test_a_price_is_kept_whole(self, clock: FakeClock):
+        rental = offer(monetization_type="RENT", price_string="₹149", price_value=149.0)
+        client = build_client(RecordingCall([media_entry(offers=[rental])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers[0].price_string == "₹149"
+        assert entry.offers[0].price_value == 149.0
+        assert entry.offers[0].price_currency == "INR"
+
+    def test_entries_stay_hashable_with_offers_on_them(self, clock: FakeClock):
+        """The record is frozen, so a list of offers inside it would be a lie."""
+        client = build_client(RecordingCall([media_entry(offers=[offer()])]), clock)
+
+        [entry] = client.search("Inception")
+
+        hash(entry)
+
+    def test_no_offers_is_an_empty_tuple(self, clock: FakeClock):
+        client = build_client(RecordingCall([media_entry(offers=[])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers == ()
+
+    def test_an_offer_with_no_package_is_dropped(self, clock: FakeClock):
+        """Without a short name it can never match a subscription, so it can
+        only ever be dead weight in the cache."""
+        client = build_client(RecordingCall([media_entry(offers=[offer(package=None)])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers == ()
+
+    def test_an_offer_whose_provider_has_a_blank_short_name_is_dropped(self, clock: FakeClock):
+        """The nastier version of the same defect: the package is there, so a
+        null check waves it through, and the offer is stored against a provider
+        named "". A subscription can never match it -- but a *free* offer needs
+        no subscription, so it would make the title look watchable and the UI
+        would offer to send someone to nowhere.
+        """
+        nameless = offer(package=offer_package(short_name=""), monetization_type="FREE")
+        client = build_client(RecordingCall([media_entry(offers=[nameless])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers == ()
+
+
+class TestWhenAnOfferExpires:
+    """``available_to`` is the "leaving Netflix in nine days" signal.
+
+    The library hands it over as an unparsed string, so this is where it
+    becomes a timestamp -- and where a value we have never seen has to not take
+    down the search that carried it.
+    """
+
+    def test_an_expiry_becomes_an_aware_utc_timestamp(self, clock: FakeClock):
+        leaving = offer(available_to="2026-08-31T00:00:00Z")
+        client = build_client(RecordingCall([media_entry(offers=[leaving])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers[0].available_to == datetime(2026, 8, 31, tzinfo=UTC)
+
+    def test_a_bare_date_is_read_as_utc_rather_than_left_naive(self, clock: FakeClock):
+        """A naive datetime is rejected outright by the timestamp column, so
+        leaving one unattached would fail at write time rather than here."""
+        leaving = offer(available_to="2026-08-31")
+        client = build_client(RecordingCall([media_entry(offers=[leaving])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers[0].available_to == datetime(2026, 8, 31, tzinfo=UTC)
+
+    def test_no_expiry_is_none(self, clock: FakeClock):
+        client = build_client(RecordingCall([media_entry(offers=[offer()])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers[0].available_to is None
+
+    def test_an_unreadable_expiry_does_not_lose_the_offer(self, clock: FakeClock):
+        """Knowing where to watch something matters; knowing when it leaves is a
+        nicety. A date format we cannot read should cost us the second, not the
+        first, and certainly not the whole search."""
+        leaving = offer(available_to="sometime next August")
+        client = build_client(RecordingCall([media_entry(offers=[leaving])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers[0].available_to is None
+        assert entry.offers[0].provider == "nfx"
+
+
+class TestProviderCatalogue:
+    def test_providers_come_back_as_records(self, clock: FakeClock):
+        client = build_client(
+            RecordingCall([]), clock, providers_fn=RecordingCall([offer_package()])
+        )
+
+        [provider] = client.providers()
+
+        assert provider.short_name == "nfx"
+        assert provider.technical_name == "netflix"
+        assert provider.name == "Netflix"
+        assert provider.monetization_types == ("FLATRATE",)
+        assert provider.icon_url.endswith("netflix.png")
+
+    def test_the_configured_country_is_used(self, clock: FakeClock):
+        catalogue = RecordingCall([offer_package()])
+        client = build_client(RecordingCall([]), clock, providers_fn=catalogue)
+
+        client.providers()
+
+        assert catalogue.calls[0]["query"] == "IN"
+
+    def test_a_provider_with_no_short_name_is_dropped(self, clock: FakeClock):
+        """The short name is the join key. A provider without one cannot be
+        subscribed to, matched against an offer, or usefully shown."""
+        client = build_client(
+            RecordingCall([]), clock, providers_fn=RecordingCall([offer_package(short_name=None)])
+        )
+
+        assert client.providers() == []
+
+    def test_fetching_the_catalogue_waits_its_turn(self, clock: FakeClock):
+        """It is a request like any other, and the limit is on the total."""
+        client = build_client(
+            RecordingCall([media_entry()]),
+            clock,
+            providers_fn=RecordingCall([offer_package()]),
+            min_interval=2.0,
+        )
+
+        client.search("Inception")
+        searched_at = clock.now
+        client.providers()
+
+        assert clock.now - searched_at >= 2.0
+
+    def test_a_transient_failure_is_retried(self, clock: FakeClock):
+        catalogue = RecordingCall(network_error(), [offer_package()])
+        client = build_client(RecordingCall([]), clock, providers_fn=catalogue)
+
+        assert len(client.providers()) == 1
+        assert len(catalogue.calls) == 2
 
 
 class TestSearchArguments:
