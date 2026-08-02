@@ -237,6 +237,68 @@ class UserProvider(Base):
     added_at: Mapped[datetime] = mapped_column(UtcDateTime, server_default=func.now())
 
 
+class DiscoveryRun(Base):
+    """One top-up of the pool of things nobody here has watched.
+
+    A log rather than a single upserted row, for the same reason ``imports`` is
+    one: the interesting question later is not only "when did this last run" but
+    "did it keep finding anything", and a row that overwrites itself cannot
+    answer the second.
+
+    Its real job is to stop the pool being refilled on every request. Discovery
+    costs several requests against an unofficial API, and what is popular in a
+    country does not change between two evenings.
+    """
+
+    __tablename__ = "discovery_runs"
+    __table_args__ = (Index("ix_discovery_runs_user_country", "user_id", "country"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), default=DEFAULT_USER_ID)
+    country: Mapped[str] = mapped_column(String(8))
+    fetched_at: Mapped[datetime] = mapped_column(UtcDateTime, server_default=func.now())
+
+    # How many titles came back, and how many of those we had never heard of.
+    # A run that returns plenty and adds none means the pool is saturated, which
+    # is a different thing from a run that returns nothing at all.
+    titles_seen: Mapped[int] = mapped_column(Integer, default=0)
+    titles_added: Mapped[int] = mapped_column(Integer, default=0)
+    requests_made: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Recommendation(Base):
+    """One title actually put in front of somebody, and the question it answered.
+
+    Kept for two reasons. The first is not repeating: being told to watch the
+    same film four evenings running is how somebody stops opening the app. The
+    second is auditability, the same reason ``title_resolutions`` keeps the
+    candidates it rejected -- a recommendation with no record of the score and
+    the reasons behind it cannot be argued with afterwards, and this app's whole
+    claim is that its one answer is defensible.
+    """
+
+    __tablename__ = "recommendations"
+    __table_args__ = (Index("ix_recommendations_user_created", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), default=DEFAULT_USER_ID)
+    title_id: Mapped[int] = mapped_column(ForeignKey("titles.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, server_default=func.now())
+
+    # The question. A recommendation without it cannot be judged later: "why did
+    # it tell me to watch a documentary" has a good answer only if we still know
+    # that the person had asked for something to think about.
+    mood: Mapped[str] = mapped_column(String(16))
+    minutes_available: Mapped[int | None] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(16))
+
+    # The answer, and its working.
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    title: Mapped["Title"] = relationship()
+
+
 class Offer(Base):
     """Where one title can be watched in one country, cached with a TTL.
 
