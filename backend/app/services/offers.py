@@ -14,6 +14,8 @@ This module is impure: it owns the session and the catalogue client.
 """
 
 import logging
+from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -128,6 +130,37 @@ def cached_offers(session: Session, title_id: int, *, country: str) -> list[Offe
         )
         for row in rows
     ]
+
+
+def cached_offers_for(
+    session: Session, title_ids: Collection[int], *, country: str
+) -> dict[int, list[OfferRecord]]:
+    """The same thing as :func:`cached_offers`, for a whole pool at once.
+
+    The recommender checks availability on every candidate it has, which is
+    hundreds of titles; asking per title would be hundreds of round trips to
+    answer one question. Titles with no offers are absent from the result rather
+    than mapped to an empty list, because "streaming nowhere" and "not in this
+    pool" are answered by the caller differently.
+    """
+    if not title_ids:
+        return {}
+
+    found: dict[int, list[OfferRecord]] = defaultdict(list)
+    rows = session.scalars(
+        select(Offer).where(Offer.title_id.in_(title_ids), Offer.country == country)
+    )
+    for row in rows:
+        found[row.title_id].append(
+            OfferRecord(
+                provider=row.provider_short_name,
+                monetization=row.monetization_type,
+                presentation=row.presentation_type,
+                url=row.url,
+                price_string=row.price_string,
+            )
+        )
+    return dict(found)
 
 
 def titles_needing_refresh(
