@@ -2,6 +2,9 @@
 
 from pydantic import BaseModel, Field
 
+from app.core.moods import Mood
+from app.core.scoring import KindPreference
+
 
 class ImportSummaryResponse(BaseModel):
     """What an upload did.
@@ -145,3 +148,78 @@ class SubscriptionsResponse(BaseModel):
 
     country: str
     short_names: list[str] = Field(default_factory=list)
+
+
+class WatchOnResponse(BaseModel):
+    """Somewhere the recommendation can be watched at no additional cost."""
+
+    short_name: str
+    name: str
+    monetization: str
+    url: str | None = None
+    # False for anything free to everyone, so the interface can say "free on
+    # JioHotstar" instead of implying a subscription the user does not have.
+    requires_subscription: bool = True
+
+
+class RecommendationRequestBody(BaseModel):
+    """What somebody wants tonight. Every field has a defensible default."""
+
+    mood: Mood = Mood.SURPRISE_ME
+    # Null means "no limit", which is different from a large number: with no
+    # budget, runtime stops influencing the choice at all rather than preferring
+    # something enormous. Capped at a day because a value beyond that is a typo
+    # rather than a plan.
+    minutes_available: int | None = Field(default=None, ge=1, le=1440)
+    kind: KindPreference = KindPreference.ANY
+    # What "not this one" sends back: the titles already turned down in this
+    # sitting. Bounded so a client cannot post an unbounded IN clause.
+    exclude_ids: list[int] = Field(default_factory=list, max_length=100)
+
+
+class RecommendedTitleResponse(BaseModel):
+    """The one title, and everything needed to justify and act on it."""
+
+    title_id: int
+    jw_node_id: str
+    title: str
+    object_type: str
+    release_year: int | None = None
+    runtime_minutes: int | None = None
+    genres: list[str] = Field(default_factory=list)
+    poster_url: str | None = None
+    imdb_score: float | None = None
+
+    score: float
+    # Why this one, in plain language, strongest first.
+    reasons: list[str] = Field(default_factory=list)
+    watch_on: list[WatchOnResponse] = Field(default_factory=list)
+
+
+class ConsideredResponse(BaseModel):
+    """How many candidates survived each stage.
+
+    Reading these in order says where the search collapsed, which is the
+    difference between "import something", "tick a box on the settings page"
+    and "ask again with more time".
+    """
+
+    pool: int
+    available: int
+    eligible: int
+
+
+class RecommendationResponse(BaseModel):
+    """One title, or none and the reason why.
+
+    ``title`` is a single object rather than a list with one element in it, and
+    that is the point: the constraint this app is built around is enforced by
+    the contract, so no client can decide to render three. There is no field
+    here that could hold a second answer.
+    """
+
+    title: RecommendedTitleResponse | None = None
+    # Populated only when there is no title. Written for somebody to read and
+    # act on -- a refusal that does not say what to change is just a dead end.
+    reason: str = ""
+    considered: ConsideredResponse

@@ -9,7 +9,7 @@ silently from then on.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import imports, providers, titles
+from app.api import imports, providers, recommend, titles
 from app.config import get_settings
 
 settings = get_settings()
@@ -31,6 +31,7 @@ app.add_middleware(
 app.include_router(imports.router)
 app.include_router(titles.router)
 app.include_router(providers.router)
+app.include_router(recommend.router)
 
 
 @app.get("/health")
