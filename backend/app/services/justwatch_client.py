@@ -24,6 +24,7 @@ from typing import Protocol, TypeVar
 
 import httpx
 from simplejustwatchapi import details as jw_details
+from simplejustwatchapi import popular as jw_popular
 from simplejustwatchapi import providers as jw_providers
 from simplejustwatchapi import search as jw_search
 from simplejustwatchapi.exceptions import JustWatchError, JustWatchHttpError
@@ -42,6 +43,13 @@ _Answer = TypeVar("_Answer")
 # single result there is no runner-up, so its ambiguity check silently never
 # fires. Ten is enough for the "Dune" case without paging.
 SEARCH_RESULTS = 10
+
+# How many popular titles to ask for per page. Much larger than a search,
+# because a discovery pool is filtered hard afterwards -- by availability, by
+# runtime, by what has already been watched -- and asking for a handful would
+# routinely leave nothing to recommend. Larger still risks the API refusing the
+# query outright for complexity.
+POPULAR_RESULTS = 50
 
 # The floor on the gap between two requests. Not a rate limit imposed on us --
 # a rate limit we impose on ourselves, because this is someone else's
@@ -182,6 +190,26 @@ class CatalogueProviders(Protocol):
     def providers(self) -> list[ProviderEntry]: ...
 
 
+class CataloguePopular(Protocol):
+    """What filling the discovery pool depends on.
+
+    The only source in this client of titles nobody has watched. Everything
+    else starts from something already in the user's history, which can only
+    ever produce a rewatch.
+    """
+
+    country: str
+
+    def popular(
+        self,
+        *,
+        providers: Sequence[str] | None = None,
+        object_types: Sequence[str] | None = None,
+        count: int = POPULAR_RESULTS,
+        offset: int = 0,
+    ) -> list[CatalogueEntry]: ...
+
+
 class JustWatchClient:
     """A rate-limited, retrying view of the JustWatch catalogue.
 
@@ -202,6 +230,7 @@ class JustWatchClient:
         search_fn: Callable[..., list[MediaEntry]] = jw_search,
         details_fn: Callable[..., MediaEntry] = jw_details,
         providers_fn: Callable[..., list[OfferPackage]] = jw_providers,
+        popular_fn: Callable[..., list[MediaEntry]] = jw_popular,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -218,6 +247,7 @@ class JustWatchClient:
         self._search_fn = search_fn
         self._details_fn = details_fn
         self._providers_fn = providers_fn
+        self._popular_fn = popular_fn
         self._sleep = sleep
         self._monotonic = monotonic
 
@@ -278,6 +308,38 @@ class JustWatchClient:
         """
         packages = self._call(self._providers_fn, self.country)
         return [_to_provider_entry(package) for package in packages if package.short_name]
+
+    def popular(
+        self,
+        *,
+        providers: Sequence[str] | None = None,
+        object_types: Sequence[str] | None = None,
+        count: int = POPULAR_RESULTS,
+        offset: int = 0,
+    ) -> list[CatalogueEntry]:
+        """What is being watched in this country, optionally on given services.
+
+        The recommender's only source of titles nobody has seen: search and
+        lookup both start from something already in the history, so a pool built
+        from them could only ever offer a rewatch.
+
+        An empty provider selection is sent as no selection at all. Somebody
+        with no subscriptions can still watch anything that is free, so an empty
+        list has to mean "everything" rather than "nothing" -- and the library
+        would reach the same answer by accident, which is not the same as
+        meaning it.
+        """
+        entries = self._call(
+            self._popular_fn,
+            self.country,
+            language=self._language,
+            count=count,
+            best_only=True,
+            offset=offset,
+            providers=list(providers) if providers else None,
+            object_types=list(object_types) if object_types else None,
+        )
+        return [_to_catalogue_entry(entry) for entry in _usable(entries, "popular titles")]
 
     def _call(self, request: Callable[..., _Answer], *args, **kwargs) -> _Answer:
         """Make one request, retrying only what a retry could fix."""

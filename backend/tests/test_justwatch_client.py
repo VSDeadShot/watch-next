@@ -580,6 +580,139 @@ class TestSearchArguments:
         assert search.calls[0]["object_types"] == ["SHOW"]
 
 
+class TestWhatIsPopular:
+    """The only source of titles nobody has watched yet.
+
+    Everything else the client does starts from something already in the user's
+    history, which can only ever produce rewatches. This is where the
+    recommender's candidates come from."""
+
+    def test_popular_titles_come_back_as_catalogue_entries(self, clock: FakeClock):
+        client = build_client(RecordingCall([]), clock, popular_fn=RecordingCall([media_entry()]))
+
+        [entry] = client.popular()
+
+        assert entry.node_id == "tm12345"
+        assert entry.title == "Inception"
+        assert entry.genres == ("act", "scf")
+
+    def test_offers_arrive_with_them(self, clock: FakeClock):
+        """The same free ride resolution gets: availability is cached from the
+        discovery pass without a single extra request."""
+        client = build_client(
+            RecordingCall([]),
+            clock,
+            popular_fn=RecordingCall([media_entry(offers=[offer()])]),
+        )
+
+        [entry] = client.popular()
+
+        assert entry.offers[0].provider == "nfx"
+        assert entry.offers[0].monetization == "FLATRATE"
+
+    def test_the_configured_country_and_language_are_used(self, clock: FakeClock):
+        popular = RecordingCall([media_entry()])
+        client = build_client(RecordingCall([]), clock, popular_fn=popular)
+
+        client.popular()
+
+        assert popular.calls[0]["query"] == "IN"
+        assert popular.calls[0]["language"] == "en"
+
+    def test_a_provider_filter_is_passed_through(self, clock: FakeClock):
+        popular = RecordingCall([media_entry()])
+        client = build_client(RecordingCall([]), clock, popular_fn=popular)
+
+        client.popular(providers=["nfx", "prv"])
+
+        assert popular.calls[0]["providers"] == ["nfx", "prv"]
+
+    def test_no_provider_filter_means_no_provider_filter(self, clock: FakeClock):
+        """Not an empty list. The library reads an empty selection as "no
+        filtering", which happens to be right, but saying it with None is the
+        difference between meaning it and getting away with it."""
+        popular = RecordingCall([media_entry()])
+        client = build_client(RecordingCall([]), clock, popular_fn=popular)
+
+        client.popular()
+
+        assert popular.calls[0]["providers"] is None
+
+    def test_an_empty_provider_list_is_sent_as_no_filter(self, clock: FakeClock):
+        """Somebody with no subscriptions can still watch anything free, so an
+        empty selection has to mean "everything" rather than "nothing"."""
+        popular = RecordingCall([media_entry()])
+        client = build_client(RecordingCall([]), clock, popular_fn=popular)
+
+        client.popular(providers=[])
+
+        assert popular.calls[0]["providers"] is None
+
+    def test_paging_is_passed_through(self, clock: FakeClock):
+        popular = RecordingCall([media_entry()])
+        client = build_client(RecordingCall([]), clock, popular_fn=popular)
+
+        client.popular(offset=100)
+
+        assert popular.calls[0]["offset"] == 100
+
+    def test_object_types_are_passed_through(self, clock: FakeClock):
+        popular = RecordingCall([media_entry()])
+        client = build_client(RecordingCall([]), clock, popular_fn=popular)
+
+        client.popular(object_types=["MOVIE"])
+
+        assert popular.calls[0]["object_types"] == ["MOVIE"]
+
+    def test_more_than_a_handful_is_asked_for(self, clock: FakeClock):
+        """The pool is filtered hard afterwards -- by availability, by runtime,
+        by what has already been watched -- so asking for four would routinely
+        leave nothing to recommend."""
+        popular = RecordingCall([media_entry()])
+        client = build_client(RecordingCall([]), clock, popular_fn=popular)
+
+        client.popular()
+
+        assert popular.calls[0]["count"] >= 20
+
+    def test_an_unusable_result_is_dropped_rather_than_taking_the_page_with_it(
+        self, clock: FakeClock
+    ):
+        client = build_client(
+            RecordingCall([]),
+            clock,
+            popular_fn=RecordingCall([media_entry(entry_id=None), media_entry()]),
+        )
+
+        assert [entry.node_id for entry in client.popular()] == ["tm12345"]
+
+    def test_nothing_popular_is_an_empty_list_not_an_error(self, clock: FakeClock):
+        client = build_client(RecordingCall([]), clock, popular_fn=RecordingCall([]))
+
+        assert client.popular() == []
+
+    def test_it_waits_its_turn_like_every_other_request(self, clock: FakeClock):
+        client = build_client(
+            RecordingCall([media_entry()]),
+            clock,
+            popular_fn=RecordingCall([media_entry()]),
+            min_interval=2.0,
+        )
+
+        client.search("Inception")
+        searched_at = clock.now
+        client.popular()
+
+        assert clock.now - searched_at >= 2.0
+
+    def test_a_transient_failure_is_retried(self, clock: FakeClock):
+        popular = RecordingCall(network_error(), [media_entry()])
+        client = build_client(RecordingCall([]), clock, popular_fn=popular)
+
+        assert len(client.popular()) == 1
+        assert len(popular.calls) == 2
+
+
 class TestRetries:
     def test_a_timeout_is_retried_and_then_succeeds(self, clock: FakeClock):
         search = RecordingCall(network_error(), [media_entry()])
