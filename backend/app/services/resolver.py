@@ -37,6 +37,7 @@ from app.core.title_parser import TitleKind
 from app.models import DEFAULT_USER_ID, Title, TitleResolution, WatchEvent
 from app.services.justwatch_client import CatalogueEntry, CatalogueLookup, CatalogueSearch
 from app.services.offers import store_offers
+from app.services.titles import title_from_entry
 
 _log = logging.getLogger(__name__)
 
@@ -292,7 +293,7 @@ def _title_for_node(session: Session, catalogue: CatalogueLookup, node_id: str) 
         return existing
 
     entry = catalogue.details(node_id)
-    title = _new_title(entry)
+    title = title_from_entry(entry)
     session.add(title)
     session.flush()
     # Free, exactly as in the automatic pass: the lookup returned the offers
@@ -406,29 +407,11 @@ def _title_for(
     if existing is not None:
         return existing
 
-    title = _new_title(entry)
+    title = title_from_entry(entry)
     session.add(title)
     session.flush()
     titles[entry.node_id] = title
     return title
-
-
-def _new_title(entry: CatalogueEntry) -> Title:
-    """A catalogue row, built from everything JustWatch told us about it."""
-    return Title(
-        jw_node_id=entry.node_id,
-        object_type=entry.object_type,
-        title=entry.title,
-        release_year=entry.release_year,
-        runtime_minutes=entry.runtime_minutes,
-        genres=list(entry.genres),
-        imdb_id=entry.imdb_id,
-        tmdb_id=entry.tmdb_id,
-        poster_url=entry.poster_url,
-        imdb_score=entry.imdb_score,
-        tmdb_score=entry.tmdb_score,
-        tomatometer=entry.tomatometer,
-    )
 
 
 def _record(
