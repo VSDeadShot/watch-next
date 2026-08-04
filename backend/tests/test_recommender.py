@@ -25,6 +25,9 @@ from app.services.justwatch_client import CatalogueEntry, OfferEntry
 from app.services.providers import set_subscriptions
 from app.services.recommender import DEFAULT_REPEAT_COOLDOWN, recommend
 from app.services.titles import store_title
+from app.services.watchlist import add as add_to_watchlist
+from app.services.watchlist import remove as remove_from_watchlist
+from app.services.watchlist import set_watched
 
 NOW = datetime(2026, 8, 2, 20, 0, tzinfo=UTC)
 
@@ -274,6 +277,60 @@ class TestWhatWasAskedFor:
         result = ask(subscribed, request=RecommendationRequest(mood=Mood.THRILL))
 
         assert result.pick.title.jw_node_id == "tm2"
+
+
+class TestTheWatchlist:
+    """What somebody chose, weighed against what we worked out about them.
+
+    A watchlist entry is the only thing here that was stated rather than
+    inferred, so it settles a close call. It does not win an argument: being
+    told to watch something mediocre because it has been sitting on a list for
+    a year is how a list stops being worth keeping.
+    """
+
+    def test_settles_a_close_call(self, subscribed: Session):
+        """tm2 loses the tiebreak on id, so only the bonus can lift it."""
+        _, second = pool(subscribed, entry("tm1"), entry("tm2"))
+        add_to_watchlist(subscribed, second.id, now=NOW)
+
+        result = ask(subscribed)
+
+        assert result.pick.title.jw_node_id == "tm2"
+
+    def test_but_does_not_override_a_much_better_answer(self, subscribed: Session):
+        """tm1 is on the list *and* wins the tiebreak, and still loses."""
+        wanted, _ = pool(subscribed, entry("tm1", imdb_score=3.0), entry("tm2", imdb_score=10.0))
+        add_to_watchlist(subscribed, wanted.id, now=NOW)
+
+        result = ask(subscribed)
+
+        assert result.pick.title.jw_node_id == "tm2"
+
+    def test_it_says_the_title_was_on_the_list(self, subscribed: Session):
+        [wanted] = pool(subscribed, entry("tm1"))
+        add_to_watchlist(subscribed, wanted.id, now=NOW)
+
+        result = ask(subscribed)
+
+        assert "it has been on your watchlist" in result.pick.reasons
+
+    def test_never_something_ticked_off_as_already_seen(self, subscribed: Session):
+        """The list is the only way to record a film watched somewhere no export
+        can see -- at a friend's house, on a plane. Ignoring it would recommend
+        that film for ever."""
+        [seen] = pool(subscribed, entry("tm1"))
+        add_to_watchlist(subscribed, seen.id, now=NOW)
+        set_watched(subscribed, seen.id, watched=True, now=NOW)
+
+        assert ask(subscribed).pick is None
+
+    def test_taking_it_off_the_list_is_not_the_same_as_watching_it(self, subscribed: Session):
+        """Going off something is no reason never to be told about it again."""
+        [dropped] = pool(subscribed, entry("tm1"))
+        add_to_watchlist(subscribed, dropped.id, now=NOW)
+        remove_from_watchlist(subscribed, dropped.id)
+
+        assert ask(subscribed).pick is not None
 
 
 class TestSayingWhyThereIsNothing:

@@ -31,10 +31,11 @@ from app.core.availability import Offer as OfferRecord
 from app.core.availability import is_available, watch_options
 from app.core.scoring import CandidateTitle, RecommendationRequest, ScoredTitle, rank_titles
 from app.core.taste import TasteProfile, WatchRecord, build_taste_profile
-from app.models import DEFAULT_USER_ID, Provider, Recommendation, Title, WatchEvent
+from app.models import DEFAULT_USER_ID, Provider, Recommendation, Title, WatchEvent, WatchlistItem
 from app.services.discovery import refresh_pool
 from app.services.justwatch_client import CataloguePopular
 from app.services.offers import cached_offers_for
+from app.services.watchlist import pending_ids
 
 _log = logging.getLogger(__name__)
 
@@ -131,7 +132,10 @@ def recommend(
         title for title in candidates if is_available(offers.get(title.id, ()), subscribed)
     ]
     profile = _taste(session, when=when, user_id=user_id)
-    ranked = rank_titles([_as_candidate(title) for title in watchable], profile, request)
+    # Asked once and tested against every candidate, rather than a query per
+    # title: the pool is hundreds long and this is one small set of ids.
+    wanted = pending_ids(session, user_id=user_id)
+    ranked = rank_titles([_as_candidate(title, wanted) for title in watchable], profile, request)
     counts = Considered(pool=len(candidates), available=len(watchable), eligible=len(ranked))
 
     if not ranked:
@@ -169,10 +173,17 @@ def _pool(
 ) -> list[Title]:
     """Everything that could be recommended, before availability has its say.
 
-    Three exclusions, and each is a different kind of "no". Already watched is
+    Four exclusions, and each is a different kind of "no". Already watched is
     permanent. Recently recommended is temporary, and exists so that the app
     does not say the same thing four evenings running. Ruled out by the caller
     is for this request only -- it is what "not this one" is made of.
+
+    The fourth is a watchlist entry ticked off by hand, and it is permanent for
+    the same reason the first one is: it means the same thing. Not everything
+    gets watched where an export can see it -- a film at a friend's house, a
+    series on a plane -- and the tick is the only way to say so. Note that
+    *removing* something from the watchlist is deliberately not on this list:
+    going off a film is no reason never to hear about it again.
 
     The cooldown has a near edge as well as a far one. Something suggested in
     the last half hour is *not* excluded, because asking twice in a row is one
@@ -186,13 +197,20 @@ def _pool(
     watched = select(WatchEvent.title_id).where(
         WatchEvent.user_id == user_id, WatchEvent.title_id.is_not(None)
     )
+    ticked_off = select(WatchlistItem.title_id).where(
+        WatchlistItem.user_id == user_id, WatchlistItem.watched_at.is_not(None)
+    )
     recently_suggested = select(Recommendation.title_id).where(
         Recommendation.user_id == user_id,
         Recommendation.created_at > when - cooldown,
         Recommendation.created_at <= when - SAME_SITTING,
     )
 
-    query = select(Title).where(Title.id.not_in(watched), Title.id.not_in(recently_suggested))
+    query = select(Title).where(
+        Title.id.not_in(watched),
+        Title.id.not_in(ticked_off),
+        Title.id.not_in(recently_suggested),
+    )
     if exclude_ids:
         query = query.where(Title.id.not_in(list(exclude_ids)))
     return list(session.scalars(query.order_by(Title.id)))
@@ -232,7 +250,7 @@ def _taste(session: Session, *, when: datetime, user_id: str) -> TasteProfile:
     )
 
 
-def _as_candidate(title: Title) -> CandidateTitle:
+def _as_candidate(title: Title, wanted: Collection[int]) -> CandidateTitle:
     return CandidateTitle(
         title_id=title.id,
         title=title.title,
@@ -242,10 +260,7 @@ def _as_candidate(title: Title) -> CandidateTitle:
         release_year=title.release_year,
         imdb_score=title.imdb_score,
         tmdb_score=title.tmdb_score,
-        # Always false for now: there is no watchlist table yet. This is the one
-        # line that changes when there is, and the scoring behind it is already
-        # written and tested.
-        on_watchlist=False,
+        on_watchlist=title.id in wanted,
     )
 
 
