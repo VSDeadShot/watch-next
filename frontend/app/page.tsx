@@ -1,160 +1,254 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import AskControls, { AskSummary } from "@/components/AskControls";
+import RecommendationCard from "@/components/RecommendationCard";
 import { apiRequest, errorMessage } from "@/lib/api";
-import type { Subscriptions } from "@/lib/types";
+import type {
+  KindPreference,
+  Mood,
+  Recommendation,
+  RecommendationRequestBody,
+} from "@/lib/types";
 
 /**
- * The front door, in the state it is in before there is anything to recommend.
+ * The product.
  *
- * This is not a placeholder for the recommend page -- it is that page's empty
- * state, built first. The reveal needs a library to draw from and a list of
- * services to filter against, and somebody arriving with neither should be told
- * exactly what is missing rather than shown an apologetic blank.
+ * It asks on arrival rather than waiting to be told to. Every part of the
+ * question has a defensible default, so a page that loaded and then sat there
+ * behind a Go button would be putting a form between somebody and the one
+ * thing this app promises -- which is the decision paralysis it exists to
+ * remove, wearing a different hat. The controls are for changing your mind,
+ * not for earning an answer.
+ *
+ * Asking again inside half an hour is free: the backend treats a repeat within
+ * one sitting as the same question and does not write it down twice, so a
+ * refresh cannot exhaust the pool or make the app forget what it just said.
  */
 export default function Home() {
-  const [subscriptions, setSubscriptions] = useState<Subscriptions | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [mood, setMood] = useState<Mood>("surprise_me");
+  const [minutes, setMinutes] = useState<number | null>(null);
+  const [kind, setKind] = useState<KindPreference>("any");
 
-  // Bumped to ask for a reload. The effect body starts the request and nothing
-  // else: every write lands in a callback, so the mount does not cascade a
-  // second render before the answer is even back.
+  const [result, setResult] = useState<Recommendation | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [rejecting, setRejecting] = useState(false);
+
+  // Everything turned down in this sitting. State rather than a ref because it
+  // is shown as well as sent -- and it is always set in the same handler that
+  // bumps `attempt`, so the effect below sees the new list on the render the
+  // bump causes.
+  const [rejected, setRejected] = useState<number[]>([]);
   const [attempt, setAttempt] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+
+  const ask = useCallback(
+    (body: RecommendationRequestBody) =>
+      apiRequest<Recommendation>("/api/recommend", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    [],
+  );
 
   useEffect(() => {
     let live = true;
 
-    apiRequest<Subscriptions>("/api/providers/mine")
-      .then((mine) => live && setSubscriptions(mine))
+    ask({
+      mood,
+      minutes_available: minutes,
+      kind,
+      exclude_ids: rejected,
+    })
+      .then((answer) => {
+        if (!live) return;
+        setResult(answer);
+        setError(null);
+      })
       .catch((caught) => live && setError(errorMessage(caught)))
-      .finally(() => live && setLoading(false));
+      .finally(() => {
+        if (!live) return;
+        setBusy(false);
+        setRejecting(false);
+      });
 
     return () => {
       live = false;
     };
+    // Deliberately keyed on `attempt` alone. Changing a chip bumps it, so the
+    // question is re-asked exactly once per change rather than once per field
+    // that happened to update in the same render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempt]);
 
-  function retry() {
-    setLoading(true);
-    setError(null);
+  function change<T>(set: (value: T) => void) {
+    return (value: T) => {
+      set(value);
+      // A different question deserves a clean slate: the titles turned down for
+      // "a laugh in thirty minutes" were not turned down for "something moving
+      // with no rush", and holding them against the new question would quietly
+      // shrink the pool for a reason nobody could see.
+      setRejected([]);
+      setBusy(true);
+      setAttempt((n) => n + 1);
+    };
+  }
+
+  function reject() {
+    const shown = result?.title?.title_id;
+    if (shown !== undefined) {
+      setRejected((current) => [...current, shown]);
+    }
+    setRejecting(true);
     setAttempt((n) => n + 1);
   }
 
-  const picked = subscriptions?.short_names.length ?? 0;
-
   return (
-    // Centred rather than flush left, unlike every other page. This one is
-    // mostly empty by nature -- there is nothing to recommend yet -- and a
-    // narrow column of copy pinned to the left of a wide screen reads as a
-    // layout that broke rather than one that is waiting.
-    <div className="mx-auto max-w-2xl">
-      <h1 className="text-3xl font-medium tracking-[-0.03em] text-balance sm:text-4xl">
-        One thing to watch tonight.
-      </h1>
-      <p className="mt-4 text-[15px] leading-relaxed text-muted">
-        Not a feed to scroll. One title, chosen from what you have actually
-        watched, filtered to the services you actually pay for. Two things have
-        to happen first.
-      </p>
-
-      <ol className="mt-10 border-t border-line">
-        <SetupStep
-          number={1}
-          title="Bring in your watch history"
-          href="/import"
-          action="Import"
-        >
-          Netflix will hand you a CSV of everything you have watched. That is
-          what the taste profile is built from &mdash; nothing here is guessed
-          from a genre you ticked once.
-        </SetupStep>
-
-        <SetupStep
-          number={2}
-          title="Say which services you have"
-          href="/settings"
-          action={picked ? "Change" : "Pick services"}
-          status={
-            loading
-              ? "Checking…"
-              : error
-                ? null
-                : picked
-                  ? `${picked} ${picked === 1 ? "service" : "services"} picked`
-                  : "Nothing picked yet"
-          }
-        >
-          The hard filter. Nothing is ever recommended that you would have to
-          subscribe to something new to watch &mdash; so with nothing picked,
-          nothing qualifies.
-        </SetupStep>
-      </ol>
-
-      {error && (
-        <div
-          role="alert"
-          className="mt-8 border border-line bg-panel px-4 py-3 text-sm"
-        >
-          <p className="text-white">{error}</p>
-          <button
-            onClick={retry}
-            className="mt-2 text-sm text-muted underline underline-offset-4 transition-colors hover:text-white"
-          >
-            Try again
-          </button>
-        </div>
+    <div>
+      {/* Collapsed on a phone until asked for, expanded always from `sm` up.
+          Both branches are in the DOM and switched with a media query rather
+          than by measuring the viewport, so the server and the first client
+          render agree. */}
+      {!expanded && (
+        <AskSummary
+          mood={mood}
+          minutes={minutes}
+          kind={kind}
+          onExpand={() => setExpanded(true)}
+        />
       )}
+
+      <div className={expanded ? "block" : "hidden sm:block"}>
+        <AskControls
+          mood={mood}
+          minutes={minutes}
+          kind={kind}
+          onMood={change(setMood)}
+          onMinutes={change(setMinutes)}
+          onKind={change(setKind)}
+          disabled={busy}
+        />
+      </div>
+
+      <div className="mt-8 sm:mt-10">
+        {error ? (
+          <Problem message={error} onRetry={() => setAttempt((n) => n + 1)} />
+        ) : busy && !result ? (
+          <Thinking />
+        ) : result?.title ? (
+          <RecommendationCard
+            key={result.title.title_id}
+            title={result.title}
+            onReject={reject}
+            rejecting={rejecting}
+          />
+        ) : result ? (
+          <NothingToSay result={result} turnedDown={rejected.length} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function Thinking() {
+  return (
+    <div
+      role="status"
+      className="grid animate-pulse overflow-hidden border border-line bg-panel sm:grid-cols-[minmax(0,240px)_1fr]"
+    >
+      {/* Matches the card's poster exactly, so the answer replaces the
+          placeholder rather than shunting the page when it lands. */}
+      <div className="h-[38vh] max-h-[420px] min-h-[200px] bg-raised sm:h-auto sm:max-h-none sm:aspect-[2/3]" />
+      <div className="space-y-4 p-6 sm:p-8">
+        <div className="h-10 w-2/3 bg-raised" />
+        <div className="h-4 w-1/3 bg-raised" />
+        <div className="h-4 w-1/2 bg-raised" />
+      </div>
+      <span className="sr-only">Finding something to watch</span>
     </div>
   );
 }
 
 /**
- * One step, as a row rather than a card.
+ * No answer, which is information rather than a failure.
  *
- * Numbered because the order is real: there is nothing to filter until history
- * has been imported, so doing these the other way round leaves somebody staring
- * at a picker that changes nothing they can see.
+ * The sentence comes from the backend, which knows which of four different
+ * problems this is and writes it to be acted on. The counts underneath say
+ * where the search collapsed, and the two links are the two things that
+ * actually change the outcome.
  */
-function SetupStep({
-  number,
-  title,
-  href,
-  action,
-  status,
-  children,
+function NothingToSay({
+  result,
+  turnedDown,
 }: {
-  number: number;
-  title: string;
-  href: string;
-  action: string;
-  status?: string | null;
-  children: React.ReactNode;
+  result: Recommendation;
+  turnedDown: number;
+}) {
+  const { pool, available, eligible } = result.considered;
+
+  return (
+    <section className="border border-line bg-panel p-6 sm:p-8">
+      <h2 className="text-xl font-medium">Nothing tonight.</h2>
+      <p className="mt-3 max-w-[60ch] text-[15px] leading-relaxed text-muted">
+        {result.reason ||
+          "Nothing matched what you asked for. Try a different mood."}
+      </p>
+
+      <dl className="mt-6 flex flex-wrap gap-x-8 gap-y-3 border-t border-line pt-5 text-sm">
+        <Count label="In the pool" value={pool} />
+        <Count label="You can watch" value={available} />
+        <Count label="Fit the question" value={eligible} />
+        {turnedDown > 0 && <Count label="Turned down" value={turnedDown} />}
+      </dl>
+
+      <div className="mt-6 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+        <Link
+          href="/settings"
+          className="border border-edge px-3.5 py-1.5 transition-colors hover:border-white hover:bg-raised"
+        >
+          Pick your services
+        </Link>
+        <Link
+          href="/import"
+          className="border border-edge px-3.5 py-1.5 transition-colors hover:border-white hover:bg-raised"
+        >
+          Import more history
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function Count({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <dt className="text-dim">{label}</dt>
+      <dd className="mt-0.5 text-lg tabular-nums">{value.toLocaleString()}</dd>
+    </div>
+  );
+}
+
+function Problem({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
 }) {
   return (
-    <li className="flex gap-4 border-b border-line py-6 sm:gap-6">
-      <span
-        aria-hidden
-        className="mt-0.5 font-mono text-sm text-dim tabular-nums"
+    <div role="alert" className="border border-line bg-panel p-6">
+      <p className="text-[15px]">Could not get a recommendation</p>
+      <p className="mt-1.5 max-w-[60ch] text-sm leading-relaxed text-muted">
+        {message}
+      </p>
+      <button
+        onClick={onRetry}
+        className="mt-4 border border-edge px-3.5 py-1.5 text-sm transition-colors hover:border-white hover:bg-raised"
       >
-        {number}
-      </span>
-
-      <div className="min-w-0 flex-1">
-        <h2 className="text-base font-medium">{title}</h2>
-        <p className="mt-1.5 text-sm leading-relaxed text-muted">{children}</p>
-
-        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
-          <Link
-            href={href}
-            className="border border-edge px-3.5 py-1.5 text-sm transition-colors hover:border-white hover:bg-raised"
-          >
-            {action}
-          </Link>
-          {status && <span className="text-sm text-dim">{status}</span>}
-        </div>
-      </div>
-    </li>
+        Try again
+      </button>
+    </div>
   );
 }
