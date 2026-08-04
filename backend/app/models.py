@@ -299,6 +299,52 @@ class Recommendation(Base):
     title: Mapped["Title"] = relationship()
 
 
+class WatchlistItem(Base):
+    """Something somebody has already decided they want to watch.
+
+    The only place in this app where intent is stated rather than inferred.
+    Everything else about a person here is read off what they did -- what they
+    watched, how recently, how much of it -- and inference is always a guess. A
+    watchlist entry is not a guess, which is why it earns a bonus in the scoring
+    rather than being just another signal, and why it is stored separately from
+    the history it will eventually become.
+
+    ``watched_at`` is how something leaves the list without being deleted, and it
+    exists because not everything gets watched where we can see it. A film seen
+    at a friend's house never appears in any export, so without a way to say so
+    by hand it would be recommended for ever. Ticked-off items are excluded from
+    recommendations exactly as imported history is.
+
+    Deleting a row and ticking it off are deliberately different actions.
+    "I have seen this" and "I no longer want to" are different facts, and only
+    the first should keep the title out of future suggestions on the grounds
+    that it has been watched.
+    """
+
+    __tablename__ = "watchlist"
+    __table_args__ = (
+        # One entry per title. Adding something twice is a person pressing a
+        # button twice, not a request for two copies.
+        UniqueConstraint("user_id", "title_id", name="uq_watchlist_user_title"),
+        Index("ix_watchlist_user_added", "user_id", "added_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), default=DEFAULT_USER_ID)
+    title_id: Mapped[int] = mapped_column(ForeignKey("titles.id"), index=True)
+    added_at: Mapped[datetime] = mapped_column(UtcDateTime, server_default=func.now())
+
+    # Why they wanted it, in their own words -- "Ravi keeps going on about this".
+    # Nothing reads it but a person, which is the point: a reason you wrote down
+    # months ago is what makes an old list worth keeping.
+    note: Mapped[str | None] = mapped_column(Text)
+
+    # Null while it is still waiting. Set when somebody says they have seen it.
+    watched_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+
+    title: Mapped["Title"] = relationship()
+
+
 class Offer(Base):
     """Where one title can be watched in one country, cached with a TTL.
 
