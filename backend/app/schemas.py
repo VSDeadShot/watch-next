@@ -1,9 +1,16 @@
 """Request and response bodies. The frontend's `lib/types.ts` mirrors these."""
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from app.core.moods import Mood
 from app.core.scoring import KindPreference
+
+# Long enough for a reason somebody typed, short enough that the column cannot
+# be used as storage. Bounded here rather than in the database because this is
+# where an arbitrarily long request body would otherwise be accepted.
+NOTE_LIMIT = 500
 
 
 class ImportSummaryResponse(BaseModel):
@@ -148,6 +155,55 @@ class SubscriptionsResponse(BaseModel):
 
     country: str
     short_names: list[str] = Field(default_factory=list)
+
+
+class WatchlistAddRequest(BaseModel):
+    """Put a title on the list, with an optional reason.
+
+    Omitting the note is not the same as sending an empty one: the "save for
+    later" button on a recommendation card knows nothing about notes, and must
+    not wipe a reason typed on the watchlist page.
+    """
+
+    title_id: int
+    note: str | None = Field(default=None, max_length=NOTE_LIMIT)
+
+
+class WatchlistUpdateRequest(BaseModel):
+    """Change an entry. Anything left out is left alone.
+
+    ``note: null`` clears the note, which is why omitting the field and sending
+    it as null have to mean different things -- the route tells them apart by
+    what the client actually sent rather than by the value.
+    """
+
+    note: str | None = Field(default=None, max_length=NOTE_LIMIT)
+    watched: bool | None = None
+
+
+class WatchlistItemResponse(BaseModel):
+    """One entry, with enough of its title to draw a row.
+
+    The title travels with the entry rather than being fetched per row by the
+    client, for the same reason it is loaded in one query on the way out: a
+    watchlist page is a list of posters, and a request per poster is a page that
+    gets slower the more somebody uses it.
+    """
+
+    title_id: int
+    jw_node_id: str
+    title: str
+    object_type: str
+    release_year: int | None = None
+    runtime_minutes: int | None = None
+    genres: list[str] = Field(default_factory=list)
+    poster_url: str | None = None
+    imdb_score: float | None = None
+
+    added_at: datetime
+    # Null while it is still waiting; set once somebody says they have seen it.
+    watched_at: datetime | None = None
+    note: str | None = None
 
 
 class WatchOnResponse(BaseModel):
