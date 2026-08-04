@@ -145,7 +145,9 @@ class TestWhatComesBackWithIt:
         assert title["title"] == "Inception"
         assert title["poster_url"] == "https://img/poster.jpg"
         assert title["runtime_minutes"] == 100
-        assert title["genres"] == ["cmy"]
+        # In English, not JustWatch's private shortcodes: a client handed "cmy"
+        # can only print it or keep its own copy of our genre table.
+        assert title["genres"] == ["Comedy"]
         assert title["imdb_score"] == 8.2
 
     def test_the_reasons_are_in_plain_language(self, client: TestClient, subscribed: Session):

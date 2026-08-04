@@ -77,7 +77,7 @@ class TestAdding:
         assert body["poster_url"] == "https://img/poster.jpg"
         assert body["release_year"] == 2016
         assert body["runtime_minutes"] == 116
-        assert body["genres"] == ["scf"]
+        assert body["genres"] == ["Science-Fiction"]
 
     def test_keeps_the_note(self, client: TestClient, titles):
         film = titles()

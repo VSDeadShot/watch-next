@@ -14,6 +14,7 @@ can quietly turn this into a feed.
 from fastapi import APIRouter
 
 from app.api.deps import CatalogueDep, SessionDep
+from app.core.genres import genre_name
 from app.core.scoring import RecommendationRequest
 from app.schemas import (
     ConsideredResponse,
@@ -68,7 +69,11 @@ def _as_response(pick: Pick) -> RecommendedTitleResponse:
         object_type=pick.title.object_type,
         release_year=pick.title.release_year,
         runtime_minutes=pick.title.runtime_minutes,
-        genres=list(pick.title.genres or ()),
+        # In English. The codes are JustWatch's private vocabulary and mean
+        # nothing outside this backend -- a client given "crm" can only either
+        # print it or keep a second copy of our table, and the second copy is
+        # the one that silently goes stale.
+        genres=[genre_name(code) for code in pick.title.genres or ()],
         poster_url=pick.title.poster_url,
         imdb_score=pick.title.imdb_score,
         score=pick.score,

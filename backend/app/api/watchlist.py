@@ -13,6 +13,7 @@ has already given us.
 from fastapi import APIRouter, HTTPException, Response, status
 
 from app.api.deps import SessionDep
+from app.core.genres import genre_name
 from app.models import WatchlistItem
 from app.schemas import WatchlistAddRequest, WatchlistItemResponse, WatchlistUpdateRequest
 from app.services.watchlist import (
@@ -112,7 +113,8 @@ def _as_response(item: WatchlistItem) -> WatchlistItemResponse:
         object_type=item.title.object_type,
         release_year=item.title.release_year,
         runtime_minutes=item.title.runtime_minutes,
-        genres=list(item.title.genres or ()),
+        # In English, as everywhere a client reads genres. See api/recommend.py.
+        genres=[genre_name(code) for code in item.title.genres or ()],
         poster_url=item.title.poster_url,
         imdb_score=item.title.imdb_score,
         added_at=item.added_at,
