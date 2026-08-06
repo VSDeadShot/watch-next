@@ -50,6 +50,9 @@ _MAX_SNIFF_BYTES = 64 * 1024
 
 _BOM = b"\xef\xbb\xbf"
 
+# Zip local-file-header magic, same as the Netflix parser sniffs for.
+_ZIP_MAGIC = b"PK\x03\x04"
+
 # Google translates this, so a title that lacks it is not necessarily wrong.
 _WATCHED_PREFIX = "Watched "
 
@@ -124,6 +127,20 @@ def open_youtube_export(stream: IO[bytes]) -> "YouTubeExport":
 
     if not head:
         raise YouTubeExportError("the file is empty.")
+
+    if start.startswith(_ZIP_MAGIC):
+        # The Netflix importer happily takes its zip, and a person who has just
+        # done that will try the same here. Explaining the difference is worth
+        # more than a generic refusal: a Takeout archive can run to gigabytes
+        # and Google splits large ones across several files, so uploading the
+        # whole thing to reach one JSON file inside it is the wrong shape of
+        # request however convenient it looks.
+        raise YouTubeExportError(
+            "this is the Takeout archive rather than the history itself. Unzip "
+            "it and upload 'Takeout/YouTube and YouTube Music/history/"
+            "watch-history.json' -- the archive can be many gigabytes and Google "
+            "splits big ones in two, so the single file is the one to send."
+        )
 
     if start.startswith(b"<"):
         raise YouTubeExportError(
@@ -209,7 +226,7 @@ class YouTubeExport:
                     yield event
         except ijson.JSONError as error:
             raise YouTubeExportError(
-                f"the file is not valid JSON and may be a partial download: {error}"
+                f"the file is not valid JSON and may be a partial download: {_first_line(error)}."
             ) from error
 
     def _read(self, entry: object) -> RawVideoEvent | None:
@@ -330,6 +347,16 @@ def _checked(video_id: str) -> str | None:
     stored and put back into links.
     """
     return video_id if _VIDEO_ID.fullmatch(video_id) else None
+
+
+def _first_line(error: Exception) -> str:
+    """The readable part of a parser error, without the diagram under it.
+
+    ijson draws an ASCII caret pointing at the offending byte, which is useful in
+    a terminal and looks like the page is broken when it lands in a sentence on
+    screen. The first line says what went wrong; the rest is scenery.
+    """
+    return str(error).splitlines()[0].strip() or error.__class__.__name__
 
 
 def _parse_time(value: object) -> datetime | None:

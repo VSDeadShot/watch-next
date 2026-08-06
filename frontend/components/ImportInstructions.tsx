@@ -10,8 +10,21 @@ import { useState } from "react";
  * and profiles has to be requested and takes a day or two to arrive. Both work
  * here, so the honest thing is to show both and say what each costs and buys,
  * rather than picking one and leaving somebody to discover the trade later.
+ *
+ * YouTube has one route and it has a step nobody guesses: Takeout hands out
+ * HTML unless you go and change it, and the HTML is useless here. That step gets
+ * its own emphasis for the same reason the Netflix routes get a comparison —
+ * the instructions are the product on this page.
  */
-const ROUTES = [
+export type Route = {
+  id: string;
+  label: string;
+  lede: string;
+  steps: React.ReactNode[];
+  caveat: string;
+};
+
+export const NETFLIX_ROUTES: readonly Route[] = [
   {
     id: "quick",
     label: "Right now",
@@ -62,73 +75,120 @@ const ROUTES = [
     caveat:
       "Worth the wait if you can: durations are what separate something you watched from something you started and abandoned, and every profile on the account comes in at once.",
   },
-] as const;
+];
 
-export default function ImportInstructions() {
-  const [open, setOpen] = useState<string>(ROUTES[0].id);
+export const YOUTUBE_ROUTES: readonly Route[] = [
+  {
+    id: "takeout",
+    label: "Google Takeout",
+    lede: "Minutes to a day, depending on how much history you have. One file at the end of it.",
+    steps: [
+      <>
+        Open{" "}
+        <ExternalLink href="https://takeout.google.com">
+          takeout.google.com
+        </ExternalLink>{" "}
+        and click <Strong>Deselect all</Strong>.
+      </>,
+      <>
+        Scroll down and tick <Strong>YouTube and YouTube Music</Strong> only.
+      </>,
+      <>
+        Click <Strong>All YouTube data included</Strong> and leave just{" "}
+        <Strong>history</Strong> ticked. The rest is comments, playlists and
+        subscriptions, none of which this reads.
+      </>,
+      <>
+        Click <Strong>Multiple formats</Strong> and change history from{" "}
+        <Strong>HTML</Strong> to <Strong>JSON</Strong>. This is the step everyone
+        misses, and HTML cannot be read here.
+      </>,
+      <>
+        Export once, wait for the email, and unzip what it sends you. The file is
+        at{" "}
+        <Path>Takeout/YouTube and YouTube Music/history/watch-history.json</Path>
+        .
+      </>,
+      <>Drop that one file in below.</>,
+    ],
+    caveat:
+      "The file itself, not the archive it came in — unlike the Netflix export. A Takeout archive can run to gigabytes and Google splits large ones across several downloads, so sending the whole thing to reach one file inside it would cost you a long upload for nothing.",
+  },
+];
+
+export default function ImportInstructions({
+  routes,
+  label,
+}: {
+  routes: readonly Route[];
+  label: string;
+}) {
+  const [open, setOpen] = useState<string>(routes[0].id);
+  const current = routes.find((route) => route.id === open) ?? routes[0];
 
   return (
     <div>
-      <div
-        role="tablist"
-        aria-label="Ways to get your Netflix history"
-        className="flex gap-1 border-b border-line"
-      >
-        {ROUTES.map((route) => {
-          const selected = route.id === open;
-          return (
-            <button
-              key={route.id}
-              role="tab"
-              type="button"
-              aria-selected={selected}
-              aria-controls={`route-${route.id}`}
-              id={`tab-${route.id}`}
-              onClick={() => setOpen(route.id)}
-              className={`-mb-px border-b px-3 py-2.5 text-sm transition-colors ${
-                selected
-                  ? "border-white text-white"
-                  : "border-transparent text-muted hover:text-white"
-              }`}
-            >
-              {route.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {ROUTES.map((route) => (
+      {/* One route needs no tabs. Netflix has two genuinely different exports
+          and YouTube has one way in, and a tablist with a single tab is a
+          control that asks a question with no answers. */}
+      {routes.length > 1 && (
         <div
-          key={route.id}
-          role="tabpanel"
-          id={`route-${route.id}`}
-          aria-labelledby={`tab-${route.id}`}
-          hidden={route.id !== open}
-          className="pt-5"
+          role="tablist"
+          aria-label={label}
+          className="flex gap-1 border-b border-line"
         >
-          <p className="text-sm text-muted">{route.lede}</p>
-
-          <ol className="mt-5 space-y-3.5">
-            {route.steps.map((step, index) => (
-              <li key={index} className="flex gap-3.5">
-                <span
-                  aria-hidden
-                  className="mt-px font-mono text-xs text-dim tabular-nums"
-                >
-                  {index + 1}
-                </span>
-                <span className="max-w-[65ch] text-[15px] leading-relaxed">
-                  {step}
-                </span>
-              </li>
-            ))}
-          </ol>
-
-          <p className="mt-5 max-w-[65ch] border-l border-line pl-4 text-sm leading-relaxed text-dim">
-            {route.caveat}
-          </p>
+          {routes.map((route) => {
+            const selected = route.id === open;
+            return (
+              <button
+                key={route.id}
+                role="tab"
+                type="button"
+                aria-selected={selected}
+                aria-controls={`route-${route.id}`}
+                id={`tab-${route.id}`}
+                onClick={() => setOpen(route.id)}
+                className={`-mb-px border-b px-3 py-2.5 text-sm transition-colors ${
+                  selected
+                    ? "border-white text-white"
+                    : "border-transparent text-muted hover:text-white"
+                }`}
+              >
+                {route.label}
+              </button>
+            );
+          })}
         </div>
-      ))}
+      )}
+
+      <div
+        role={routes.length > 1 ? "tabpanel" : undefined}
+        id={`route-${current.id}`}
+        aria-labelledby={routes.length > 1 ? `tab-${current.id}` : undefined}
+        className={routes.length > 1 ? "pt-5" : undefined}
+      >
+        <p className="text-sm text-muted">{current.lede}</p>
+
+        <ol className="mt-5 space-y-3.5">
+          {current.steps.map((step, index) => (
+            <li key={index} className="flex gap-3.5">
+              <span
+                aria-hidden
+                className="mt-px font-mono text-xs text-dim tabular-nums"
+              >
+                {index + 1}
+              </span>
+              <span className="max-w-[65ch] text-[15px] leading-relaxed">
+                {step}
+              </span>
+            </li>
+          ))}
+        </ol>
+
+        <p className="mt-5 max-w-[65ch] border-l border-line pl-4 text-sm leading-relaxed text-dim">
+          {current.caveat}
+        </p>
+      </div>
     </div>
   );
 }

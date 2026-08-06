@@ -82,6 +82,19 @@ class TestOpeningTheFile:
         with pytest.raises(YouTubeExportError):
             open_youtube_export(io.BytesIO(b"\n  <html><body>Watch history</body></html>"))
 
+    def test_rejects_the_takeout_archive_and_says_which_file_to_send(self):
+        """The Netflix importer takes its zip as downloaded, so somebody who has
+        just done that will try it here. A Takeout archive can be gigabytes and
+        Google splits large ones, so this one really does want the file itself
+        -- which makes the refusal worth explaining rather than just issuing."""
+        with pytest.raises(YouTubeExportError) as excinfo:
+            open_youtube_export(io.BytesIO(b"PK\x03\x04" + b"\x00" * 40))
+
+        message = str(excinfo.value)
+        assert "archive" in message
+        assert "Unzip" in message
+        assert "watch-history.json" in message
+
     def test_rejects_a_json_document_that_is_not_an_array(self):
         with pytest.raises(YouTubeExportError) as excinfo:
             open_youtube_export(io.BytesIO(b'{"entries": []}'))
@@ -139,6 +152,21 @@ class TestOpeningTheFile:
 
         with pytest.raises(YouTubeExportError):
             list(export.events())
+
+    def test_the_parse_error_is_one_readable_line(self):
+        """ijson draws an ASCII caret under the offending byte, which is helpful
+        in a terminal and looks like a broken page when it lands in a sentence
+        on screen."""
+        good = json.dumps([watch_entry(), watch_entry()]).encode("utf-8")
+        export = open_youtube_export(io.BytesIO(good[: len(good) // 2]))
+
+        with pytest.raises(YouTubeExportError) as excinfo:
+            list(export.events())
+
+        message = str(excinfo.value)
+        assert "\n" not in message
+        assert "^" not in message
+        assert "partial download" in message
 
 
 class TestTheFixture:

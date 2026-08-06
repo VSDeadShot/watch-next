@@ -11,11 +11,33 @@ import type { ImportSummary } from "@/lib/types";
  * should trust with their history, so every row is accounted for and every
  * exclusion is named -- including the boring ones.
  */
-const SKIP_REASONS: Record<string, string> = {
-  supplemental_video: "trailers and recaps",
-  too_short: "watched for under a minute",
-  missing_title: "no title in the row",
-  bad_timestamp: "unreadable date",
+const SKIP_REASONS: Record<string, [one: string, many: string]> = {
+  // Netflix.
+  supplemental_video: ["trailer or recap", "trailers and recaps"],
+  too_short: ["view under a minute", "views under a minute"],
+  // YouTube.
+  unavailable_video: [
+    "video since removed or made private",
+    "videos since removed or made private",
+  ],
+  not_a_video: ["search or other non-video", "searches and other non-videos"],
+  advert: ["advert", "adverts"],
+  malformed_entry: ["entry that made no sense", "entries that made no sense"],
+  // Both.
+  missing_title: ["row with no title", "rows with no title"],
+  bad_timestamp: ["unreadable date", "unreadable dates"],
+};
+
+/**
+ * What the file was, said back to the person who uploaded it.
+ *
+ * Worth naming rather than assuming: somebody who has just uploaded three files
+ * to two services needs to know which one this summary is describing.
+ */
+const FORMATS: Record<string, string> = {
+  full: "the complete export",
+  simple: "titles and dates",
+  takeout: "your YouTube history",
 };
 
 export default function ImportSummaryCard({
@@ -35,15 +57,13 @@ export default function ImportSummaryCard({
         </h2>
         <p className="mt-1 text-sm text-muted">
           {summary.filename ?? "Your export"} &middot;{" "}
-          {summary.export_format === "full"
-            ? "the complete export"
-            : "titles and dates"}
+          {FORMATS[summary.export_format] ?? summary.export_format}
         </p>
       </header>
 
       <dl className="grid grid-cols-2 divide-line sm:grid-cols-4 sm:divide-x">
         <Figure
-          label="Rows in the file"
+          label={summary.source === "youtube" ? "Entries" : "Rows in the file"}
           value={summary.total_rows}
           tone="muted"
         />
@@ -111,8 +131,13 @@ function Figure({
 }
 
 function describeSkips(byReason: Record<string, number>): string {
-  const parts = Object.entries(byReason).map(
-    ([reason, count]) => `${count} ${SKIP_REASONS[reason] ?? reason}`,
-  );
+  const parts = Object.entries(byReason).map(([reason, count]) => {
+    const wording = SKIP_REASONS[reason];
+    // A count and a noun that disagree ("1 adverts") reads as a bug in the
+    // thing counting, which is the last impression an importer wants to give
+    // while explaining what it dropped.
+    if (!wording) return `${count} ${reason}`;
+    return `${count} ${count === 1 ? wording[0] : wording[1]}`;
+  });
   return parts.length ? parts.join(", ") : "no reason recorded";
 }

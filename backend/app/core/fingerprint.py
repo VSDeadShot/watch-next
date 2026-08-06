@@ -96,6 +96,64 @@ def fingerprint_events(events: Sequence[RawWatchEvent], *, source: str) -> tuple
     return tuple(fingerprints)
 
 
+def video_event_fingerprint(
+    *,
+    source: str,
+    video_id: str,
+    watched_at: datetime,
+    occurrence: int = 0,
+) -> str:
+    """Return the stable identity of one video view as a hex digest.
+
+    The video's id rather than its title, because that is the part of a YouTube
+    entry that cannot change. Titles are edited by the people who uploaded them,
+    and a re-import after an edit would otherwise add every affected view a
+    second time.
+
+    Raises:
+        ValueError: if ``watched_at`` is naive, for the reason given in
+            :func:`watch_event_fingerprint`.
+    """
+    if watched_at.tzinfo is None or watched_at.tzinfo.utcoffset(watched_at) is None:
+        raise ValueError(f"watched_at needs a timezone, got naive {watched_at!r}")
+
+    parts = (source, video_id, watched_at.astimezone(UTC).isoformat(), str(occurrence))
+    return hashlib.sha256(_encode(parts)).hexdigest()
+
+
+class VideoFingerprints:
+    """Fingerprints a history as it streams past, numbering rows that repeat.
+
+    :func:`fingerprint_events` can number repeats because it is handed the whole
+    file at once. A history too big to hold is the entire reason the YouTube
+    importer streams, so this remembers one row instead of all of them: Takeout
+    writes its entries in time order, which puts any two identical enough to need
+    telling apart next to each other.
+
+    An export shuffled out of that order would hand both such rows the same
+    digest, and the second would be counted as already held. That is a lost view
+    rather than a wrong one, and it costs a duplicate of something watched twice
+    in the same millisecond -- the right way round to be wrong, given the
+    alternative is holding every fingerprint in the file in memory.
+    """
+
+    def __init__(self, source: str) -> None:
+        self._source = source
+        self._previous: tuple[str, datetime] | None = None
+        self._run = 0
+
+    def of(self, *, video_id: str, watched_at: datetime) -> str:
+        key = (video_id, watched_at)
+        self._run = self._run + 1 if key == self._previous else 0
+        self._previous = key
+        return video_event_fingerprint(
+            source=self._source,
+            video_id=video_id,
+            watched_at=watched_at,
+            occurrence=self._run,
+        )
+
+
 def _encode(parts: Sequence[str]) -> bytes:
     """Join fields so that no value can be mistaken for a field boundary."""
     encoded = [part.encode("utf-8") for part in parts]

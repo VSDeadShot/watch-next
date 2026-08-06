@@ -2,8 +2,6 @@
 
 import { useRef, useState } from "react";
 
-const ACCEPT = ".zip,.csv";
-
 /**
  * Where the export file goes in.
  *
@@ -16,9 +14,13 @@ const ACCEPT = ".zip,.csv";
 export default function ImportDropzone({
   onFile,
   busy,
+  accept,
+  hint,
 }: {
   onFile: (file: File) => void;
   busy: boolean;
+  accept: string;
+  hint: string;
 }) {
   const [over, setOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -29,7 +31,7 @@ export default function ImportDropzone({
     }
     // Cleared so that picking the same file twice in a row still fires a change
     // event -- re-uploading the same export is a normal thing to do here, since
-    // Netflix's export is cumulative and imports are idempotent.
+    // both exports are cumulative and imports are idempotent.
     if (input.current) {
       input.current.value = "";
     }
@@ -59,7 +61,7 @@ export default function ImportDropzone({
         <input
           ref={input}
           type="file"
-          accept={ACCEPT}
+          accept={accept}
           disabled={busy}
           onChange={(event) => take(event.target.files?.[0])}
           className="sr-only"
@@ -92,9 +94,7 @@ export default function ImportDropzone({
           )}
         </span>
 
-        <span className="text-sm text-dim">
-          The .zip exactly as Netflix sent it, or the .csv on its own
-        </span>
+        <span className="text-sm text-dim">{hint}</span>
       </label>
     </div>
   );

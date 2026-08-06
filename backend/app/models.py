@@ -345,6 +345,44 @@ class WatchlistItem(Base):
     title: Mapped["Title"] = relationship()
 
 
+class YouTubeView(Base):
+    """One YouTube video watched.
+
+    Kept well away from ``watch_events`` on purpose. YouTube is a taste and
+    statistics signal and never a recommendation candidate -- nobody needs an app
+    to tell them to watch YouTube -- and a table that cannot be resolved against
+    the catalogue is a much stronger guarantee of that than a convention someone
+    has to remember.
+
+    Named for the view rather than the video because that is what a row is: the
+    same video watched three times is three rows, and how often something is
+    returned to is most of what this data is good for. What it was called and
+    whose channel it was travel with each row rather than living in a table of
+    videos, for the reason ``watch_events`` keeps its raw title: the record of a
+    viewing should still read correctly after the video has been deleted.
+    """
+
+    __tablename__ = "youtube_views"
+    __table_args__ = (
+        # The same idempotency guarantee watch_events has. Takeout exports the
+        # whole history every time, so re-uploading is the normal case.
+        UniqueConstraint("user_id", "fingerprint", name="uq_youtube_views_user_fingerprint"),
+        Index("ix_youtube_views_user_watched_at", "user_id", "watched_at"),
+        # Everything interesting here is "per channel, over time".
+        Index("ix_youtube_views_user_channel", "user_id", "channel_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), default=DEFAULT_USER_ID)
+    import_id: Mapped[int] = mapped_column(ForeignKey("imports.id"))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+
+    video_id: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    channel_name: Mapped[str | None] = mapped_column(Text)
+    watched_at: Mapped[datetime] = mapped_column(UtcDateTime)
+
+
 class Offer(Base):
     """Where one title can be watched in one country, cached with a TTL.
 

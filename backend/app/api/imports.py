@@ -6,8 +6,15 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from app.api.deps import SessionDep, SettingsDep
 from app.core.netflix_parser import NetflixExportError
+from app.core.youtube_parser import YouTubeExportError
 from app.schemas import ImportSummaryResponse
-from app.services.importer import SOURCE, import_netflix_export
+from app.services.importer import (
+    SOURCE,
+    YOUTUBE_SOURCE,
+    ImportSummary,
+    import_netflix_export,
+    import_youtube_export,
+)
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
 
@@ -40,9 +47,41 @@ async def import_netflix(
         # folders to try next.
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
 
+    return _response(summary, source=SOURCE)
+
+
+# Deliberately sync. FastAPI runs a plain `def` endpoint in a worker thread,
+# which is what makes it safe to hand the upload's own file object to a reader
+# that blocks -- the alternative, awaiting `file.read()`, would pull two hundred
+# megabytes into memory and undo the streaming this endpoint exists for.
+@router.post("/youtube", response_model=ImportSummaryResponse)
+def import_youtube(
+    file: Annotated[UploadFile, File()],
+    session: SessionDep,
+) -> ImportSummaryResponse:
+    """Import a Google Takeout YouTube watch history.
+
+    Takes ``watch-history.json`` as exported. YouTube views are a taste and
+    statistics signal only and never become recommendations. Safe to call
+    repeatedly with the same file.
+    """
+    try:
+        summary = import_youtube_export(session, file.file, filename=file.filename)
+    except YouTubeExportError as error:
+        # Rolls back whatever the stream managed to write before it failed. A
+        # truncated download is only discovered part way through, so without
+        # this a broken upload would leave half a history behind and no summary
+        # saying so.
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+
+    return _response(summary, source=YOUTUBE_SOURCE)
+
+
+def _response(summary: ImportSummary, *, source: str) -> ImportSummaryResponse:
     return ImportSummaryResponse(
         import_id=summary.import_id,
-        source=SOURCE,
+        source=source,
         filename=summary.filename,
         export_format=summary.export_format,
         total_rows=summary.total_rows,
