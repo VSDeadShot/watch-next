@@ -6,18 +6,23 @@ proves the unique constraint that makes re-imports idempotent actually holds.
 """
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
-from app.models import DEFAULT_USER_ID, ImportRun, WatchEvent
+from app.models import DEFAULT_USER_ID, ImportRun, Offer, Provider, Title, UserProvider, WatchEvent
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# The country every availability fixture below defaults to, and the one the API
+# tests configure their settings with. Availability is meaningless without one.
+COUNTRY = "IN"
 
 
 @pytest.fixture
@@ -33,6 +38,98 @@ def session() -> Iterator[Session]:
     with Session(engine) as session:
         yield session
     engine.dispose()
+
+
+@pytest.fixture
+def offers(session: Session):
+    """Cache one offer, the way a resolution or a refresh would have.
+
+    Shared because availability is asked about from three directions now -- the
+    recommender, the watchlist and the service that dresses both -- and all
+    three should be looking at rows of the same shape.
+    """
+
+    def add(
+        title: Title,
+        provider: str,
+        monetization: str = "FLATRATE",
+        *,
+        country: str = COUNTRY,
+        url: str | None = None,
+        presentation: str = "HD",
+    ) -> Offer:
+        offer = Offer(
+            title_id=title.id,
+            country=country,
+            provider_short_name=provider,
+            monetization_type=monetization,
+            presentation_type=presentation,
+            url=url,
+            fetched_at=datetime(2026, 8, 1, tzinfo=UTC),
+        )
+        session.add(offer)
+        session.flush()
+        return offer
+
+    return add
+
+
+@pytest.fixture
+def providers(session: Session):
+    """Put a service in the catalogue, which is where its display name lives."""
+
+    def add(short_name: str, name: str, *, country: str = COUNTRY) -> Provider:
+        provider = Provider(
+            country=country,
+            short_name=short_name,
+            technical_name=short_name,
+            name=name,
+            icon_url=None,
+            monetization_types=["flatrate"],
+        )
+        session.add(provider)
+        session.flush()
+        return provider
+
+    return add
+
+
+@pytest.fixture
+def subscribes(session: Session):
+    """Say which services somebody pays for -- the availability rule's input."""
+
+    def add(*short_names: str, country: str = COUNTRY, user_id: str = DEFAULT_USER_ID) -> None:
+        for short_name in short_names:
+            session.add(UserProvider(user_id=user_id, country=country, short_name=short_name))
+        session.flush()
+
+    return add
+
+
+@pytest.fixture
+def counting(session: Session):
+    """Count the statements a block of work sends.
+
+    A query per row is the failure that does not show up in any assertion about
+    the answer -- the page is correct and gets slower the more somebody uses it
+    -- so the batching is pinned down by counting rather than by trusting it.
+    """
+
+    @contextmanager
+    def counter() -> Iterator[list[str]]:
+        statements: list[str] = []
+        bind = session.get_bind()
+
+        def record(_conn, _cursor, statement, *_rest) -> None:
+            statements.append(statement)
+
+        event.listen(bind, "before_cursor_execute", record)
+        try:
+            yield statements
+        finally:
+            event.remove(bind, "before_cursor_execute", record)
+
+    return counter
 
 
 @pytest.fixture

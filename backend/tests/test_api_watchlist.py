@@ -251,3 +251,108 @@ class TestRemoving:
         client.delete(f"{WATCHLIST}/{film.id}")
 
         assert session.get(Title, film.id) is not None
+
+
+class TestWhereToWatchIt:
+    """The point of the list. A row that does not say whether it can be watched
+    is a row somebody has to go and check, which is the errand this app exists
+    to run for them."""
+
+    def test_a_row_says_where_to_press_play(
+        self, client: TestClient, titles, offers, providers, subscribes
+    ):
+        providers("nfx", "Netflix")
+        subscribes("nfx")
+        film = titles("Arrival")
+        offers(film, "nfx", url="https://netflix/watch/1")
+        client.post(WATCHLIST, json={"title_id": film.id})
+
+        [row] = client.get(WATCHLIST).json()
+
+        assert row["watch_on"] == [
+            {
+                "short_name": "nfx",
+                "name": "Netflix",
+                "monetization": "FLATRATE",
+                "url": "https://netflix/watch/1",
+                "requires_subscription": True,
+            }
+        ]
+
+    def test_something_on_no_service_of_theirs_says_so_by_saying_nothing(
+        self, client: TestClient, titles, offers, subscribes
+    ):
+        """Empty is the honest answer and the one the page draws as "not on your
+        services" -- the same meaning it has on a recommendation."""
+        subscribes("nfx")
+        film = titles("Arrival")
+        offers(film, "prv")
+        client.post(WATCHLIST, json={"title_id": film.id})
+
+        [row] = client.get(WATCHLIST).json()
+
+        assert row["watch_on"] == []
+
+    def test_free_to_everybody_counts(self, client: TestClient, titles, offers, providers):
+        providers("yt", "YouTube")
+        film = titles("Arrival")
+        offers(film, "yt", "ADS")
+        client.post(WATCHLIST, json={"title_id": film.id})
+
+        [row] = client.get(WATCHLIST).json()
+
+        assert row["watch_on"][0]["requires_subscription"] is False
+
+    def test_the_answer_arrives_with_the_entry_that_was_just_added(
+        self, client: TestClient, titles, offers, providers, subscribes
+    ):
+        """The recommendation card saves a title and draws the reply. Leaving
+        availability off that one response would blank a row that had it a
+        moment earlier."""
+        providers("nfx", "Netflix")
+        subscribes("nfx")
+        film = titles("Arrival")
+        offers(film, "nfx")
+
+        body = client.post(WATCHLIST, json={"title_id": film.id}).json()
+
+        assert [option["name"] for option in body["watch_on"]] == ["Netflix"]
+
+    def test_the_answer_survives_a_change(
+        self, client: TestClient, titles, offers, providers, subscribes
+    ):
+        providers("nfx", "Netflix")
+        subscribes("nfx")
+        film = titles("Arrival")
+        offers(film, "nfx")
+        client.post(WATCHLIST, json={"title_id": film.id})
+
+        body = client.patch(f"{WATCHLIST}/{film.id}", json={"note": "for Sunday"}).json()
+
+        assert [option["name"] for option in body["watch_on"]] == ["Netflix"]
+
+    def test_a_long_list_costs_no_more_queries_than_a_short_one(
+        self, client: TestClient, counting, titles, offers, providers, subscribes
+    ):
+        """The reason the lookup is batched. This is the page that gets slower
+        the more use it gets, if anything is going to -- so what is asserted is
+        that the cost does not move with the length, rather than some number
+        that happens to be true today."""
+        providers("nfx", "Netflix")
+        subscribes("nfx")
+
+        def add(count: int) -> None:
+            for _ in range(count):
+                film = titles("Film")
+                offers(film, "nfx")
+                client.post(WATCHLIST, json={"title_id": film.id})
+
+        add(3)
+        with counting() as few:
+            assert len(client.get(WATCHLIST).json()) == 3
+
+        add(22)
+        with counting() as many:
+            assert len(client.get(WATCHLIST).json()) == 25
+
+        assert len(many) == len(few)

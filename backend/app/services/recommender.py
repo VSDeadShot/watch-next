@@ -20,18 +20,18 @@ This module is impure: it owns the session and the catalogue client.
 """
 
 import logging
-from collections.abc import Collection, Sequence
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.availability import Offer as OfferRecord
-from app.core.availability import is_available, watch_options
+from app.core.availability import is_available
 from app.core.scoring import CandidateTitle, RecommendationRequest, ScoredTitle, rank_titles
 from app.core.taste import TasteProfile, WatchRecord, build_taste_profile
-from app.models import DEFAULT_USER_ID, Provider, Recommendation, Title, WatchEvent, WatchlistItem
+from app.models import DEFAULT_USER_ID, Recommendation, Title, WatchEvent, WatchlistItem
+from app.services.availability import WatchOn, watch_on
 from app.services.discovery import refresh_pool
 from app.services.justwatch_client import CataloguePopular
 from app.services.offers import cached_offers_for
@@ -53,19 +53,6 @@ SAME_SITTING = timedelta(minutes=30)
 
 
 @dataclass(frozen=True)
-class WatchOn:
-    """Somewhere a recommendation can be watched, in words a person reads."""
-
-    provider: str
-    name: str
-    monetization: str
-    url: str | None = None
-    # False for anything free to everyone, so the interface can say "free on
-    # JioHotstar" rather than implying a subscription somebody does not have.
-    requires_subscription: bool = True
-
-
-@dataclass(frozen=True)
 class Pick:
     """The one title, and everything needed to justify and act on it."""
 
@@ -73,6 +60,11 @@ class Pick:
     score: float = 0.0
     reasons: tuple[str, ...] = ()
     watch_on: tuple[WatchOn, ...] = ()
+    # Whether this is already waiting on their list. Carried so a client does
+    # not have to guess: a "save for later" button offering to save something
+    # already saved is a small lie, and the reason line right above it may
+    # already have said the opposite.
+    on_watchlist: bool = False
 
 
 @dataclass(frozen=True)
@@ -150,7 +142,8 @@ def recommend(
         title=title,
         score=best.score,
         reasons=best.reasons,
-        watch_on=_watch_on(session, offers.get(title.id, ()), subscribed, country=country),
+        watch_on=watch_on(session, offers.get(title.id, ()), subscribed, country=country),
+        on_watchlist=best.candidate.on_watchlist,
     )
     _record(session, best, request, when=when, user_id=user_id)
     session.commit()
@@ -262,48 +255,6 @@ def _as_candidate(title: Title, wanted: Collection[int]) -> CandidateTitle:
         tmdb_score=title.tmdb_score,
         on_watchlist=title.id in wanted,
     )
-
-
-def _watch_on(
-    session: Session,
-    offers: Sequence[OfferRecord],
-    subscribed: Collection[str],
-    *,
-    country: str,
-) -> tuple[WatchOn, ...]:
-    """Turn the watchable offers into something worth putting on a screen."""
-    options = watch_options(offers, subscribed)
-    names = _provider_names(session, [option.provider for option in options], country=country)
-    return tuple(
-        WatchOn(
-            provider=option.provider,
-            name=names.get(option.provider, option.provider),
-            monetization=str(option.monetization),
-            url=option.url,
-            requires_subscription=option.requires_subscription,
-        )
-        for option in options
-    )
-
-
-def _provider_names(
-    session: Session, short_names: Collection[str], *, country: str
-) -> dict[str, str]:
-    """Display names for the services an offer named.
-
-    Anything missing falls back to its short name at the call site. The provider
-    catalogue can be out of date -- it is refreshed on its own schedule -- and
-    "watch it on jhs" is a poor label but a true one, which beats refusing to
-    say where.
-    """
-    if not short_names:
-        return {}
-    rows = session.execute(
-        select(Provider.short_name, Provider.name).where(
-            Provider.country == country, Provider.short_name.in_(list(short_names))
-        )
-    )
-    return {short_name: name for short_name, name in rows}
 
 
 def _record(

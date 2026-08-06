@@ -157,6 +157,18 @@ class SubscriptionsResponse(BaseModel):
     short_names: list[str] = Field(default_factory=list)
 
 
+class WatchOnResponse(BaseModel):
+    """Somewhere a title can be watched at no additional cost."""
+
+    short_name: str
+    name: str
+    monetization: str
+    url: str | None = None
+    # False for anything free to everyone, so the interface can say "free on
+    # JioHotstar" instead of implying a subscription the user does not have.
+    requires_subscription: bool = True
+
+
 class WatchlistAddRequest(BaseModel):
     """Put a title on the list, with an optional reason.
 
@@ -200,22 +212,16 @@ class WatchlistItemResponse(BaseModel):
     poster_url: str | None = None
     imdb_score: float | None = None
 
+    # Where it can be watched right now, best first. Empty means nowhere the
+    # user can watch it at no additional cost -- which is the single most
+    # useful thing a list of things-to-watch can tell somebody, and the reason
+    # this is on the entry rather than fetched per row by the client.
+    watch_on: list[WatchOnResponse] = Field(default_factory=list)
+
     added_at: datetime
     # Null while it is still waiting; set once somebody says they have seen it.
     watched_at: datetime | None = None
     note: str | None = None
-
-
-class WatchOnResponse(BaseModel):
-    """Somewhere the recommendation can be watched at no additional cost."""
-
-    short_name: str
-    name: str
-    monetization: str
-    url: str | None = None
-    # False for anything free to everyone, so the interface can say "free on
-    # JioHotstar" instead of implying a subscription the user does not have.
-    requires_subscription: bool = True
 
 
 class RecommendationRequestBody(BaseModel):
@@ -250,6 +256,10 @@ class RecommendedTitleResponse(BaseModel):
     # Why this one, in plain language, strongest first.
     reasons: list[str] = Field(default_factory=list)
     watch_on: list[WatchOnResponse] = Field(default_factory=list)
+    # Already waiting on their list. Said outright so the interface does not
+    # have to infer it from a sentence in `reasons`, which is written to be
+    # read rather than parsed.
+    on_watchlist: bool = False
 
 
 class ConsideredResponse(BaseModel):

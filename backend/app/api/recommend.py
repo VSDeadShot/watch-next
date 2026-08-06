@@ -88,4 +88,5 @@ def _as_response(pick: Pick) -> RecommendedTitleResponse:
             )
             for option in pick.watch_on
         ],
+        on_watchlist=pick.on_watchlist,
     )

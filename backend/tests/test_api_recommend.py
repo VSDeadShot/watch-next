@@ -168,6 +168,37 @@ class TestWhatComesBackWithIt:
         assert option["url"] == "https://netflix.com/title/1"
         assert option["requires_subscription"] is True
 
+    def test_says_outright_whether_it_is_already_on_the_list(
+        self, client: TestClient, subscribed: Session
+    ):
+        """The card offers to save this. Offering to save something already
+        saved is a small lie, and the reasons may have just said the opposite --
+        so it is a field rather than a sentence a client would have to parse."""
+        stock(subscribed, entry("tm1"))
+        title = client.post(RECOMMEND, json={}).json()["title"]
+        assert title["on_watchlist"] is False
+
+        client.post("/api/watchlist", json={"title_id": title["title_id"]})
+
+        assert client.post(RECOMMEND, json={}).json()["title"]["on_watchlist"] is True
+
+    def test_something_ticked_off_is_not_still_waiting(
+        self, client: TestClient, subscribed: Session
+    ):
+        """Ticked off means seen, and wanting to see something again is a new
+        decision rather than the old one still standing -- so the button should
+        offer to save it, not claim it already is."""
+        stock(subscribed, entry("tm1"))
+        title = client.post(RECOMMEND, json={}).json()["title"]
+        client.post("/api/watchlist", json={"title_id": title["title_id"]})
+        client.patch(f"/api/watchlist/{title['title_id']}", json={"watched": True})
+
+        body = client.post(RECOMMEND, json={}).json()
+
+        # Ticking it off also takes it out of the pool, so there may be no
+        # answer at all -- what must not happen is being told it is still saved.
+        assert body["title"] is None or body["title"]["on_watchlist"] is False
+
     def test_the_counts_say_where_it_collapsed(self, client: TestClient, subscribed: Session):
         on_prime = OfferEntry(provider=PRIME, monetization="FLATRATE")
         stock(subscribed, entry("tm1", offers=(on_prime,)))

@@ -10,6 +10,7 @@ import type {
   Mood,
   Recommendation,
   RecommendationRequestBody,
+  WatchlistItem,
 } from "@/lib/types";
 
 /**
@@ -43,6 +44,16 @@ export default function Home() {
   const [rejected, setRejected] = useState<number[]>([]);
   const [attempt, setAttempt] = useState(0);
   const [expanded, setExpanded] = useState(false);
+
+  // Kept by title id rather than as a flag, so a re-roll cannot arrive wearing
+  // the last answer's "Saved" label -- and so that turning something down and
+  // being shown it again next week still remembers it was saved.
+  const [saved, setSaved] = useState<Set<number>>(new Set());
+  const [saving, setSaving] = useState(false);
+  // Kept apart from `error`, which stands for "there is no answer to show". A
+  // watchlist that would not accept a title is no reason to take the title off
+  // the screen -- it is still the answer, and it is still watchable tonight.
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const ask = useCallback(
     (body: RecommendationRequestBody) =>
@@ -105,6 +116,33 @@ export default function Home() {
     setAttempt((n) => n + 1);
   }
 
+  /**
+   * Keep this one for another evening.
+   *
+   * Deliberately not a rejection: the title stays in play for tonight and the
+   * card does not change. Saving is safe to repeat -- the backend treats a
+   * second add of the same title as the same decision rather than a new entry
+   * -- so pressing it after a refresh costs nothing.
+   */
+  async function save() {
+    const shown = result?.title?.title_id;
+    if (shown === undefined) return;
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await apiRequest<WatchlistItem>("/api/watchlist", {
+        method: "POST",
+        body: JSON.stringify({ title_id: shown }),
+      });
+      setSaved((current) => new Set(current).add(shown));
+    } catch (caught) {
+      setSaveError(errorMessage(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div>
       {/* Collapsed on a phone until asked for, expanded always from `sm` up.
@@ -142,11 +180,21 @@ export default function Home() {
             key={result.title.title_id}
             title={result.title}
             onReject={reject}
+            onSave={() => void save()}
             rejecting={rejecting}
+            // Either saved in this sitting or already waiting when it arrived.
+            saved={saved.has(result.title.title_id) || result.title.on_watchlist}
+            saving={saving}
           />
         ) : result ? (
           <NothingToSay result={result} turnedDown={rejected.length} />
         ) : null}
+
+        {saveError && (
+          <p role="alert" className="mt-4 text-sm text-muted">
+            Could not save that: {saveError}
+          </p>
+        )}
       </div>
     </div>
   );

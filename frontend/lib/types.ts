@@ -110,6 +110,9 @@ export interface RecommendedTitle {
   /** Why this one, in plain language, strongest first. */
   reasons: string[];
   watch_on: WatchOn[];
+  /** Already waiting on the list, said outright rather than left to be read
+   *  out of `reasons` -- which is written for a person, not for a parser. */
+  on_watchlist: boolean;
 }
 
 /** How many candidates survived each stage. Read in order, it says where the
@@ -132,4 +135,30 @@ export interface Recommendation {
   /** Populated only when there is no title, and written to be acted on. */
   reason: string;
   considered: Considered;
+}
+
+/**
+ * `GET /api/watchlist` -- one thing somebody decided they want to watch.
+ *
+ * The only thing in this app that was chosen rather than inferred. Everything
+ * else about a person here is a guess from their history; this is not.
+ */
+export interface WatchlistItem {
+  title_id: number;
+  jw_node_id: string;
+  title: string;
+  object_type: string;
+  release_year: number | null;
+  runtime_minutes: number | null;
+  genres: string[];
+  poster_url: string | null;
+  imdb_score: number | null;
+
+  /** Where it can be watched now, best first. Empty means nowhere they can. */
+  watch_on: WatchOn[];
+
+  added_at: string;
+  /** Null while it is still waiting; set once they say they have seen it. */
+  watched_at: string | null;
+  note: string | null;
 }

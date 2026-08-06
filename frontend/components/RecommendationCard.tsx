@@ -18,11 +18,17 @@ import type { RecommendedTitle } from "@/lib/types";
 export default function RecommendationCard({
   title,
   onReject,
+  onSave,
   rejecting,
+  saved,
+  saving,
 }: {
   title: RecommendedTitle;
   onReject: () => void;
+  onSave: () => void;
   rejecting: boolean;
+  saved: boolean;
+  saving: boolean;
 }) {
   const isSeries = title.object_type === "SHOW";
 
@@ -70,14 +76,34 @@ export default function RecommendationCard({
         <div className="mt-auto pt-8">
           <WatchOn title={title} />
 
-          <button
-            type="button"
-            onClick={onReject}
-            disabled={rejecting}
-            className="mt-4 text-sm text-muted underline underline-offset-4 transition-colors hover:text-white disabled:opacity-50"
-          >
-            {rejecting ? "Finding another…" : "Not this one"}
-          </button>
+          {/* Two ways to say no, and they mean opposite things. "Not this one"
+              throws it back for this evening; saving keeps it for an evening
+              when there is time. Without the second, the only thing somebody
+              could do with a title they liked but could not watch tonight was
+              try to remember it. */}
+          <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+            <button
+              type="button"
+              onClick={onReject}
+              disabled={rejecting}
+              className="text-muted underline underline-offset-4 transition-colors hover:text-white disabled:opacity-50"
+            >
+              {rejecting ? "Finding another…" : "Not this one"}
+            </button>
+
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={saving || saved}
+              className="text-muted underline underline-offset-4 transition-colors hover:text-white disabled:no-underline disabled:opacity-70"
+            >
+              {saved
+                ? "Saved to your list"
+                : saving
+                  ? "Saving…"
+                  : "Save for later"}
+            </button>
+          </div>
         </div>
       </div>
     </article>

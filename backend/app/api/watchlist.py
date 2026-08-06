@@ -6,16 +6,25 @@ the library -- and there is at most one entry per title, so asking them to look
 up a second identifier first would be a round trip to learn a number that exists
 only because rows need one.
 
-Nothing here touches the network: the watchlist points at titles the catalogue
-has already given us.
+Every entry carries where it can be watched. A list of things somebody meant to
+watch, with no word on whether any of them can be, is a list they have to check
+by hand -- which is the work this app exists to take away. It is read from the
+offer cache rather than fetched, so nothing here touches the network: the
+watchlist points at titles the catalogue has already given us.
 """
 
 from fastapi import APIRouter, HTTPException, Response, status
 
-from app.api.deps import SessionDep
+from app.api.deps import SessionDep, SettingsDep
 from app.core.genres import genre_name
 from app.models import WatchlistItem
-from app.schemas import WatchlistAddRequest, WatchlistItemResponse, WatchlistUpdateRequest
+from app.schemas import (
+    WatchlistAddRequest,
+    WatchlistItemResponse,
+    WatchlistUpdateRequest,
+    WatchOnResponse,
+)
+from app.services.availability import WatchOn, watch_on_for
 from app.services.watchlist import (
     TitleNotInCatalogue,
     WatchlistItemNotFound,
@@ -31,19 +40,28 @@ router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
 
 @router.get("", response_model=list[WatchlistItemResponse])
-def mine(session: SessionDep, include_watched: bool = False) -> list[WatchlistItemResponse]:
-    """The list, newest decision first.
+def mine(
+    session: SessionDep, settings: SettingsDep, include_watched: bool = False
+) -> list[WatchlistItemResponse]:
+    """The list, newest decision first, each row saying where to watch it.
 
     Args:
         include_watched: also return entries already ticked off. Off by default:
             the ordinary question is "what have I still got waiting", and a list
             that keeps growing with things already seen stops being read.
     """
-    return [_as_response(item) for item in entries(session, include_watched=include_watched)]
+    items = entries(session, include_watched=include_watched)
+    # One lookup for the whole page. Availability per row would be a query per
+    # poster, which is invisible at three entries and absurd at three hundred --
+    # the same argument that has the titles loaded in one query on the way out.
+    where = watch_on_for(session, [item.title_id for item in items], country=settings.jw_country)
+    return [_as_response(item, where.get(item.title_id, ())) for item in items]
 
 
 @router.post("", response_model=WatchlistItemResponse)
-def add_title(body: WatchlistAddRequest, session: SessionDep) -> WatchlistItemResponse:
+def add_title(
+    body: WatchlistAddRequest, session: SessionDep, settings: SettingsDep
+) -> WatchlistItemResponse:
     """Put a title on the list.
 
     Adding something already there is not an error and does not make a second
@@ -60,12 +78,12 @@ def add_title(body: WatchlistAddRequest, session: SessionDep) -> WatchlistItemRe
         # resolve the library rather than add the entry again.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 
-    return _as_response(item)
+    return _as_response(item, _where(session, item.title_id, country=settings.jw_country))
 
 
 @router.patch("/{title_id}", response_model=WatchlistItemResponse)
 def change(
-    title_id: int, body: WatchlistUpdateRequest, session: SessionDep
+    title_id: int, body: WatchlistUpdateRequest, session: SessionDep, settings: SettingsDep
 ) -> WatchlistItemResponse:
     """Tick an entry off, un-tick it, or change its note.
 
@@ -80,7 +98,9 @@ def change(
             set_watched(session, title_id, watched=body.watched)
         if "note" in sent:
             set_note(session, title_id, note=body.note)
-        return _as_response(entry(session, title_id))
+        return _as_response(
+            entry(session, title_id), _where(session, title_id, country=settings.jw_country)
+        )
     except WatchlistItemNotFound as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 
@@ -105,7 +125,12 @@ def drop(title_id: int, session: SessionDep) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def _as_response(item: WatchlistItem) -> WatchlistItemResponse:
+def _where(session: SessionDep, title_id: int, *, country: str) -> tuple[WatchOn, ...]:
+    """Where one entry can be watched. The batched lookup, asked for one row."""
+    return watch_on_for(session, [title_id], country=country)[title_id]
+
+
+def _as_response(item: WatchlistItem, where: tuple[WatchOn, ...]) -> WatchlistItemResponse:
     return WatchlistItemResponse(
         title_id=item.title_id,
         jw_node_id=item.title.jw_node_id,
@@ -117,6 +142,16 @@ def _as_response(item: WatchlistItem) -> WatchlistItemResponse:
         genres=[genre_name(code) for code in item.title.genres or ()],
         poster_url=item.title.poster_url,
         imdb_score=item.title.imdb_score,
+        watch_on=[
+            WatchOnResponse(
+                short_name=option.provider,
+                name=option.name,
+                monetization=option.monetization,
+                url=option.url,
+                requires_subscription=option.requires_subscription,
+            )
+            for option in where
+        ],
         added_at=item.added_at,
         watched_at=item.watched_at,
         note=item.note,
