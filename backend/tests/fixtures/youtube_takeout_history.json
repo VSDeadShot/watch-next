@@ -1,0 +1,98 @@
+[
+  {
+    "header": "YouTube",
+    "title": "Watched Refactoring a legacy service without downtime",
+    "titleUrl": "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+    "subtitles": [
+      {
+        "name": "Sample Engineering Channel",
+        "url": "https://www.youtube.com/channel/UCsample000000000000001"
+      }
+    ],
+    "time": "2024-03-14T20:12:03.415Z",
+    "products": ["YouTube"],
+    "activityControls": ["YouTube watch history"]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched A quiet walk through an old town",
+    "titleUrl": "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+    "time": "2024-03-15T09:00:00Z",
+    "products": ["YouTube"],
+    "activityControls": ["YouTube watch history"]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched Forty seconds of soup",
+    "titleUrl": "https://www.youtube.com/shorts/ccccccccccc",
+    "subtitles": [
+      {
+        "name": "Sample Cooking Channel",
+        "url": "https://www.youtube.com/channel/UCsample000000000000002"
+      }
+    ],
+    "time": "2024-03-15T21:44:10.001Z",
+    "products": ["YouTube"],
+    "activityControls": ["YouTube watch history"]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched a video that has been removed",
+    "time": "2024-03-16T11:20:00Z",
+    "products": ["YouTube"],
+    "activityControls": ["YouTube watch history"]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched Buy this thing right now",
+    "titleUrl": "https://www.youtube.com/watch?v=ddddddddddd",
+    "subtitles": [
+      {
+        "name": "Sample Advertiser",
+        "url": "https://www.youtube.com/channel/UCsample000000000000003"
+      }
+    ],
+    "time": "2024-03-16T11:22:00Z",
+    "products": ["YouTube"],
+    "details": [{"name": "From Google Ads"}],
+    "activityControls": ["YouTube watch history"]
+  },
+  {
+    "header": "YouTube",
+    "title": "Searched for how to poach an egg",
+    "titleUrl": "https://www.youtube.com/results?search_query=how+to+poach+an+egg",
+    "time": "2024-03-16T11:25:00Z",
+    "products": ["YouTube"],
+    "activityControls": ["YouTube search history"]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched Something with an unreadable date",
+    "titleUrl": "https://www.youtube.com/watch?v=eeeeeeeeeee",
+    "time": "not a timestamp",
+    "products": ["YouTube"],
+    "activityControls": ["YouTube watch history"]
+  },
+  {
+    "header": "YouTube",
+    "title": "",
+    "titleUrl": "https://www.youtube.com/watch?v=fffffffffff",
+    "time": "2024-03-17T08:00:00Z",
+    "products": ["YouTube"],
+    "activityControls": ["YouTube watch history"]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched Refactoring a legacy service without downtime",
+    "titleUrl": "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+    "subtitles": [
+      {
+        "name": "Sample Engineering Channel",
+        "url": "https://www.youtube.com/channel/UCsample000000000000001"
+      }
+    ],
+    "time": "2024-03-18T22:05:41.900Z",
+    "products": ["YouTube"],
+    "activityControls": ["YouTube watch history"]
+  }
+]
