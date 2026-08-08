@@ -162,3 +162,82 @@ export interface WatchlistItem {
   watched_at: string | null;
   note: string | null;
 }
+
+/**
+ * One labelled number in a ranked or ordered list. Mirrors `CountResponse`.
+ *
+ * The order is the backend's and means something different per list: genres
+ * arrive commonest-first, decades arrive oldest-first. Nothing here re-sorts
+ * them.
+ */
+export interface LabelledCount {
+  label: string;
+  count: number;
+}
+
+/** Activity in one month, dated by its first day as `YYYY-MM-DD`. */
+export interface MonthCount {
+  /** Every month between the first and the last is present, empty ones
+   *  included -- a gap in viewing is information, and the series would draw a
+   *  lie about the shape of a year without them. */
+  month: string;
+  count: number;
+}
+
+/** A much-watched title, and how much watching went into it. */
+export interface TopTitle {
+  title_id: number;
+  title: string;
+  /** Carried because the count means different things either side of it:
+   *  twelve sessions of a series is twelve episodes, twelve of a film is
+   *  having watched it twelve times. */
+  object_type: string;
+  sessions: number;
+}
+
+/** The Netflix-shaped half of `GET /api/stats` -- a watch history, counted. */
+export interface HistoryStats {
+  /** Distinct things, and the number of times somebody sat down. Both are
+   *  true and neither substitutes for the other. */
+  titles: number;
+  sessions: number;
+  movies: number;
+  series: number;
+
+  /** Null when nothing in the history recorded how long it ran, which is not
+   *  the same as nothing having been watched. Present it as the lower bound
+   *  `sessions_timed` says it is. */
+  minutes_watched: number | null;
+  sessions_timed: number;
+
+  first_watched: string | null;
+  last_watched: string | null;
+
+  top_genres: LabelledCount[];
+  decades: LabelledCount[];
+  top_titles: TopTitle[];
+  by_month: MonthCount[];
+}
+
+/** The YouTube half, reported separately because it is a separate thing. */
+export interface YouTubeStats {
+  /** Views and distinct videos both, because the gap between them is how
+   *  often somebody goes back to the same thing. */
+  views: number;
+  videos: number;
+  channels: number;
+  first_watched: string | null;
+  last_watched: string | null;
+  top_channels: LabelledCount[];
+  by_month: MonthCount[];
+}
+
+/** `GET /api/stats` -- everything the stats page is drawn from. */
+export interface Stats {
+  history: HistoryStats;
+  youtube: YouTubeStats;
+  /** Watch events that never reached a catalogue row, and so are in none of
+   *  the numbers above. Worth showing because the fix is one a person can
+   *  act on: resolve the library, or decide a few by hand. */
+  unresolved_sessions: number;
+}
