@@ -1,6 +1,6 @@
 """Request and response bodies. The frontend's `lib/types.ts` mirrors these."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -289,3 +289,96 @@ class RecommendationResponse(BaseModel):
     # act on -- a refusal that does not say what to change is just a dead end.
     reason: str = ""
     considered: ConsideredResponse
+
+
+class CountResponse(BaseModel):
+    """One labelled number in a ranked list."""
+
+    label: str
+    count: int
+
+
+class MonthCountResponse(BaseModel):
+    """Activity in one month, dated by its first day.
+
+    Every month between the first and the last is present, including the ones
+    with nothing in them, so a client can draw the series without having to
+    reconstruct the gaps -- and without being able to omit them by accident.
+    """
+
+    month: date
+    count: int
+
+
+class TopTitleResponse(BaseModel):
+    """A much-watched title, and how much watching went into it.
+
+    ``object_type`` is carried because the count means different things either
+    side of it: twelve sessions of a series is twelve episodes, twelve of a film
+    is having watched it twelve times.
+    """
+
+    title_id: int
+    title: str
+    object_type: str
+    sessions: int
+
+
+class HistoryStatsResponse(BaseModel):
+    """A watch history, counted.
+
+    ``titles`` and ``sessions`` are both here and neither substitutes for the
+    other: somebody who watched sixty episodes of one show made one decision and
+    sat down sixty times, and only saying one of those would misrepresent them.
+    """
+
+    titles: int = 0
+    sessions: int = 0
+    movies: int = 0
+    series: int = 0
+
+    # Null when nothing in the history recorded how long it ran, which is not
+    # the same as nothing having been watched. ``sessions_timed`` says how many
+    # sessions the figure rests on, so a client can present it as the lower
+    # bound it is rather than as a total.
+    minutes_watched: int | None = None
+    sessions_timed: int = 0
+
+    first_watched: datetime | None = None
+    last_watched: datetime | None = None
+
+    # Genres in English, as everywhere a client reads them. See api/recommend.py.
+    top_genres: list[CountResponse] = Field(default_factory=list)
+    # Chronological rather than ranked -- it is a shape over time.
+    decades: list[CountResponse] = Field(default_factory=list)
+    top_titles: list[TopTitleResponse] = Field(default_factory=list)
+    by_month: list[MonthCountResponse] = Field(default_factory=list)
+
+
+class YouTubeStatsResponse(BaseModel):
+    """A YouTube history, counted, and reported separately from the rest.
+
+    Separate for the reason the table is: YouTube is a taste and statistics
+    signal and never a recommendation candidate.
+    """
+
+    views: int = 0
+    videos: int = 0
+    channels: int = 0
+    first_watched: datetime | None = None
+    last_watched: datetime | None = None
+    top_channels: list[CountResponse] = Field(default_factory=list)
+    by_month: list[MonthCountResponse] = Field(default_factory=list)
+
+
+class StatsResponse(BaseModel):
+    """Everything the stats page is drawn from."""
+
+    history: HistoryStatsResponse = Field(default_factory=HistoryStatsResponse)
+    youtube: YouTubeStatsResponse = Field(default_factory=YouTubeStatsResponse)
+    # Watch events that never reached a catalogue row, and so are in none of the
+    # numbers above. Reported rather than omitted: a summary that quietly
+    # understates itself is the thing this app exists not to be, and the fix --
+    # a resolve pass, or a few choices on the unresolved list -- is one a person
+    # can act on once they know.
+    unresolved_sessions: int = 0

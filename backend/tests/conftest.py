@@ -146,13 +146,17 @@ def watched(session: Session):
     counter = iter(range(1_000_000))
 
     def add(title: str, *, kind: str = "movie", ambiguous: bool = False, **extra) -> WatchEvent:
+        # Defaults rather than fixed values: who watched it and when are the two
+        # things a test about history has to be able to vary, and a keyword that
+        # collided with a hard-coded one here would fail as a TypeError rather
+        # than as anything a reader could act on.
+        extra.setdefault("user_id", DEFAULT_USER_ID)
+        extra.setdefault("watched_at", datetime(2024, 3, 14, 20, 12, tzinfo=UTC))
         event = WatchEvent(
-            user_id=DEFAULT_USER_ID,
             import_id=run.id,
             fingerprint=f"fp{next(counter)}",
             source="netflix",
             raw_title=title,
-            watched_at=datetime(2024, 3, 14, 20, 12, tzinfo=UTC),
             kind=kind,
             title=title,
             title_ambiguous=ambiguous,
