@@ -53,6 +53,11 @@ class ResolveSummaryResponse(BaseModel):
     unresolved: int
     failed: int
     linked_events: int
+    # How many distinct titles a further pass would still ask about. A pass is
+    # driven in batches -- it paces itself at a request a second against an
+    # unofficial API, so a whole library in one request is minutes long -- and
+    # this is what lets a caller show progress and know when to stop.
+    remaining: int = 0
 
 
 class TitleCandidate(BaseModel):
@@ -78,6 +83,41 @@ class UnresolvedTitleResponse(BaseModel):
     # How many watch events are waiting on this answer, so the list can be
     # worked through in order of how much each fix is worth.
     event_count: int
+    candidates: list[TitleCandidate] = Field(default_factory=list)
+
+
+class UnresolvedPageResponse(BaseModel):
+    """One page of the queue, and the length of the whole queue.
+
+    An envelope rather than a bare list because the length is the part a caller
+    cannot work out for itself: a page of twenty-five looks identical whether it
+    is the whole queue or the first of nine.
+    """
+
+    total: int = 0
+    items: list[UnresolvedTitleResponse] = Field(default_factory=list)
+
+
+class ResolvedTitleResponse(BaseModel):
+    """A question somebody already answered, offered back so it can be changed.
+
+    A manual answer leaves the unresolved queue the moment it is given, so
+    without this there is no way back to one that was given wrongly -- and
+    picking the wrong Dune is exactly the mistake this whole flow exists around.
+
+    The rejected candidates travel with it so a change of mind starts from the
+    same list rather than from an empty search box.
+    """
+
+    resolution_id: int
+    query_title: str
+    kind: str
+    title_id: int
+    title: str
+    object_type: str
+    release_year: int | None = None
+    poster_url: str | None = None
+    resolved_at: datetime
     candidates: list[TitleCandidate] = Field(default_factory=list)
 
 

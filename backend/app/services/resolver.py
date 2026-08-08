@@ -25,13 +25,21 @@ This module is impure: it owns the session and the catalogue client.
 
 import logging
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 
 from simplejustwatchapi.exceptions import JustWatchError
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from app.core.matching import Candidate, MatchMethod, MatchQuery, MatchResult, match_title
+from app.core.matching import (
+    Candidate,
+    MatchMethod,
+    MatchQuery,
+    MatchResult,
+    match_title,
+    object_types_for,
+)
 from app.core.normalize import normalize_title
 from app.core.title_parser import TitleKind
 from app.models import DEFAULT_USER_ID, Title, TitleResolution, WatchEvent
@@ -44,6 +52,11 @@ _log = logging.getLogger(__name__)
 # SQLite caps how many values one statement may bind, and a long-running show
 # can have thousands of episodes behind a single answer, so linking is batched.
 _ID_UPDATE_CHUNK = 500
+
+# How many past decisions the fixer offers to reconsider. Enough to catch the
+# one somebody just got wrong, few enough that it stays a footnote rather than
+# a second queue.
+RECENT_RESOLUTIONS = 10
 
 
 @dataclass(frozen=True)
@@ -60,6 +73,11 @@ class ResolveSummary:
     unresolved: int = 0
     failed: int = 0
     linked_events: int = 0
+    # How many distinct titles still have no stored answer once this pass
+    # finished. A batched caller needs it to draw progress and to know when to
+    # stop asking; without it the only signal is "we searched fewer than we were
+    # allowed", which cannot say how much is left.
+    remaining: int = 0
 
 
 @dataclass
@@ -84,6 +102,7 @@ def resolve_library(
     catalogue: CatalogueSearch,
     *,
     retry_unresolved: bool = False,
+    limit: int | None = None,
     user_id: str = DEFAULT_USER_ID,
 ) -> ResolveSummary:
     """Resolve every distinct title that does not already have an answer.
@@ -102,11 +121,21 @@ def resolve_library(
     titles = _titles_by_node(session)
     summary = ResolveSummary()
 
+    searches = 0
     for question in questions:
         stored = known.get((question.key, question.kind))
-        if stored is not None and not _should_ask_again(stored, retry_unresolved):
+        if not _still_to_ask(stored, retry_unresolved):
             summary = _apply(session, question.event_ids, stored.title_id, summary)
             continue
+
+        if limit is not None and searches >= limit:
+            # Out of allowance, and the walk deliberately carries on rather than
+            # breaking. A question further down may already have an answer with
+            # rows waiting to be linked to it, and abandoning the loop would
+            # leave those rows waiting for whichever batch happened to reach
+            # them -- which is not a promise batching should be allowed to break.
+            continue
+        searches += 1
 
         try:
             entries = catalogue.search(question.display_title)
@@ -142,7 +171,19 @@ def resolve_library(
     # see. Without this, a caller holding a session configured not to expire on
     # commit would keep reading the pre-resolution rows.
     session.expire_all()
-    return summary
+
+    # Re-read rather than reasoning from `known`, which was loaded before this
+    # pass wrote to it. What is left is defined as what another identical call
+    # would search, so a caller can drive batches until it reaches zero.
+    after = _stored_resolutions(session, user_id)
+    return replace(
+        summary,
+        remaining=sum(
+            1
+            for question in questions
+            if _still_to_ask(after.get((question.key, question.kind)), retry_unresolved)
+        ),
+    )
 
 
 class ResolutionNotFound(LookupError):
@@ -208,12 +249,131 @@ def unresolved_titles(session: Session, *, user_id: str = DEFAULT_USER_ID) -> li
     return listed
 
 
+@dataclass(frozen=True)
+class UnresolvedPage:
+    """One page of the fixer's queue, and how long the whole queue is."""
+
+    total: int = 0
+    items: list[UnresolvedTitle] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ResolvedTitle:
+    """A question somebody already answered, so a wrong answer can be changed."""
+
+    resolution_id: int
+    query_title: str
+    kind: TitleKind
+    title_id: int
+    title: str
+    object_type: str
+    release_year: int | None
+    poster_url: str | None
+    resolved_at: datetime
+    candidates: list[dict]
+
+
+def unresolved_page(
+    session: Session,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+    user_id: str = DEFAULT_USER_ID,
+) -> UnresolvedPage:
+    """A slice of the queue, with the length of the whole thing.
+
+    ``total`` is the length of the queue rather than of the page, because a
+    caller that only knew its own page could neither say "25 of 214" nor tell
+    whether to ask for another.
+
+    The slicing happens after the sort, in Python, which is where the sort
+    already was: the order is by how many rows each answer is holding up, and
+    that count is worked out from the events rather than stored on the
+    resolution, so no ``ORDER BY`` could produce it. This trims what goes over
+    the wire and nothing else -- it is not a way to avoid reading the table.
+    """
+    listed = unresolved_titles(session, user_id=user_id)
+    start = max(offset, 0)
+    window = listed[start:] if limit is None else listed[start : start + limit]
+    return UnresolvedPage(total=len(listed), items=window)
+
+
+def recent_resolutions(
+    session: Session,
+    *,
+    limit: int = RECENT_RESOLUTIONS,
+    user_id: str = DEFAULT_USER_ID,
+) -> list[ResolvedTitle]:
+    """The questions answered by hand, most recently decided first.
+
+    Only manual answers. A choice somebody made is the only kind of choice
+    somebody might want back -- an automatic match that was wrong shows up as a
+    wrong recommendation, not as a decision to revisit.
+
+    The title is loaded with the resolution rather than followed per row: this
+    is a short list, but a relationship walked in a loop is a query per row
+    whatever its length, and the length is the caller's to choose.
+    """
+    rows = session.scalars(
+        select(TitleResolution)
+        .where(
+            TitleResolution.user_id == user_id,
+            TitleResolution.method == MatchMethod.MANUAL,
+            TitleResolution.title_id.is_not(None),
+        )
+        .options(joinedload(TitleResolution.title))
+        # Ties break on the id so two decisions in the same instant still have
+        # one stable order, as everywhere else that sorts for a person to read.
+        .order_by(TitleResolution.resolved_at.desc(), TitleResolution.id.desc())
+        .limit(limit)
+    ).all()
+
+    return [
+        ResolvedTitle(
+            resolution_id=row.id,
+            query_title=row.query_title,
+            kind=row.kind,
+            title_id=row.title.id,
+            title=row.title.title,
+            object_type=row.title.object_type,
+            release_year=row.title.release_year,
+            poster_url=row.title.poster_url,
+            resolved_at=row.resolved_at,
+            candidates=list(row.candidates),
+        )
+        for row in rows
+    ]
+
+
+def search_candidates(
+    catalogue: CatalogueSearch,
+    query: str,
+    *,
+    kind: TitleKind | None = None,
+) -> list[Candidate]:
+    """Ask the catalogue what it has under a name somebody typed.
+
+    The way back when the stored candidates are no help -- a title misspelled in
+    the export, or known by a different name in this country -- which is
+    precisely the case the matcher cannot be expected to have got right.
+
+    Read-only on purpose. A search comes back carrying offers, and it is
+    tempting to bank them, but there is no catalogue row to hang them on until
+    somebody actually picks one. Storing a title for every result of every
+    search someone typed would fill the catalogue with things nobody chose; the
+    offers arrive for free with the lookup that confirms the pick.
+    """
+    entries = catalogue.search(query, object_types=object_types_for(kind))
+    return [entry.as_candidate() for entry in entries]
+
+
 def resolve_manually(
     session: Session,
     catalogue: CatalogueLookup,
     *,
     resolution_id: int,
     node_id: str,
+    now: datetime | None = None,
     user_id: str = DEFAULT_USER_ID,
 ) -> ManualResolution:
     """Record the answer a person gave, and link every row that was waiting.
@@ -239,6 +399,11 @@ def resolve_manually(
     resolution.method = MatchMethod.MANUAL
     resolution.confidence = 1.0
     resolution.reason = f"chosen by hand: {title.title}"
+    # Stamped with when the decision was made, not left at when the matcher gave
+    # up. The column defaults on insert only, so without this a list of recent
+    # decisions would be ordered by when each refusal was recorded -- and the
+    # fix somebody just made would appear wherever the original refusal fell.
+    resolution.resolved_at = now or datetime.now(UTC)
     # candidates is deliberately left as it was. It is the record of what the
     # matcher was choosing between when it gave up, which is both the audit of
     # why a person was asked and what a change of mind re-picks from.
@@ -332,6 +497,15 @@ def _questions(session: Session, user_id: str) -> list[_Question]:
         )
         question.event_ids.append(event_id)
     return list(questions.values())
+
+
+def _still_to_ask(stored: TitleResolution | None, retry_unresolved: bool) -> bool:
+    """Whether another pass would spend a request on this question.
+
+    One definition, used both to decide what to search and to count what is
+    left, so the two can never drift into disagreeing about what "done" means.
+    """
+    return stored is None or _should_ask_again(stored, retry_unresolved)
 
 
 def _stored_resolutions(

@@ -11,6 +11,7 @@ answer a person already gave by hand.
 """
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 from simplejustwatchapi.exceptions import JustWatchApiError, JustWatchHttpError
@@ -18,13 +19,17 @@ from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from app.core.matching import MatchMethod
+from app.core.title_parser import TitleKind
 from app.models import Offer, Title, TitleResolution, WatchEvent
 from app.services.justwatch_client import CatalogueEntry, OfferEntry
 from app.services.offers import cached_offers
 from app.services.resolver import (
     ResolutionNotFound,
+    recent_resolutions,
     resolve_library,
     resolve_manually,
+    search_candidates,
+    unresolved_page,
     unresolved_titles,
 )
 
@@ -45,6 +50,13 @@ THE_OFFICE = CatalogueEntry(
     release_year=2005,
     genres=("cmy",),
 )
+# Fixed moments for the tests about ordering. Passing the clock in rather than
+# letting two calls race for different microseconds is what makes those tests
+# say what they mean instead of usually passing.
+DECIDED_FIRST = datetime(2026, 8, 1, 9, 0, tzinfo=UTC)
+DECIDED_SECOND = datetime(2026, 8, 2, 9, 0, tzinfo=UTC)
+DECIDED_THIRD = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
+
 DUNE_1984 = CatalogueEntry(node_id="tm84", title="Dune", object_type="MOVIE", release_year=1984)
 DUNE_2021 = CatalogueEntry(node_id="tm21", title="Dune", object_type="MOVIE", release_year=2021)
 
@@ -67,9 +79,13 @@ class FakeCatalogue:
         self.results = results or {}
         self.default = default if default is not None else []
         self.searched: list[str] = []
+        # What each search was narrowed to, recorded because "did we filter by
+        # the right kind" is the behaviour some of these tests are about.
+        self.search_types: list[tuple[str, ...] | None] = []
 
     def search(self, title: str, *, object_types=None) -> list[CatalogueEntry]:
         self.searched.append(title)
+        self.search_types.append(tuple(object_types) if object_types else None)
         outcome = self.results.get(title, self.default)
         if isinstance(outcome, Exception):
             raise outcome
@@ -808,3 +824,382 @@ class TestAvailabilityIsCachedForFree:
         assert [
             offer.provider for offer in cached_offers(session, fixed.title.id, country="IN")
         ] == ["prv"]
+
+
+class TestResolvingInBatches:
+    """A pass paces itself at a request a second against somebody else's API,
+    so a library of four hundred titles is seven minutes inside one HTTP
+    request. The limit is what lets a caller do it in pieces and show progress.
+
+    The limit counts *searches*, not questions looked at. That is what makes
+    repeated batches make progress without anyone having to guarantee the order
+    the questions come back in: every search stores an answer, and a stored
+    answer is skipped for free next time.
+    """
+
+    def test_a_limit_caps_how_many_searches_one_pass_makes(self, session: Session, watched):
+        for index in range(10):
+            watched(f"Film {index}")
+        catalogue = EchoCatalogue()
+
+        resolve_library(session, catalogue, limit=4)
+
+        assert len(catalogue.searched) == 4
+
+    def test_no_limit_still_asks_about_everything(self, session: Session, watched):
+        for index in range(10):
+            watched(f"Film {index}")
+        catalogue = EchoCatalogue()
+
+        resolve_library(session, catalogue)
+
+        assert len(catalogue.searched) == 10
+
+    def test_the_next_batch_carries_on_rather_than_starting_over(self, session: Session, watched):
+        for index in range(10):
+            watched(f"Film {index}")
+        catalogue = EchoCatalogue()
+
+        resolve_library(session, catalogue, limit=4)
+        resolve_library(session, catalogue, limit=4)
+
+        assert len(catalogue.searched) == 8
+        # Nothing asked twice. A batch that re-asked would burn its allowance on
+        # answers we already had and never reach the end of the library.
+        assert len(set(catalogue.searched)) == 8
+
+    def test_enough_batches_finish_the_library(self, session: Session, watched):
+        for index in range(10):
+            watched(f"Film {index}")
+        catalogue = EchoCatalogue()
+
+        passes = 0
+        while resolve_library(session, catalogue, limit=3).remaining:
+            passes += 1
+            assert passes < 10, "batching is not making progress"
+
+        assert sorted(catalogue.searched) == sorted(f"Film {index}" for index in range(10))
+
+    def test_remaining_says_how_much_a_further_pass_would_ask_about(
+        self, session: Session, watched
+    ):
+        for index in range(10):
+            watched(f"Film {index}")
+        catalogue = EchoCatalogue()
+
+        summary = resolve_library(session, catalogue, limit=4)
+
+        assert summary.searched == 4
+        assert summary.remaining == 6
+
+    def test_remaining_is_nothing_once_every_question_has_an_answer(
+        self, session: Session, watched
+    ):
+        watched("Inception")
+        catalogue = FakeCatalogue({"Inception": [INCEPTION]})
+
+        assert resolve_library(session, catalogue).remaining == 0
+
+    def test_a_refusal_is_not_something_a_further_pass_would_ask_about(
+        self, session: Session, watched
+    ):
+        """It is waiting on a person, not on another request. Counting it as
+        remaining would leave a progress bar that never finishes."""
+        watched("Dune")
+        catalogue = FakeCatalogue({"Dune": [DUNE_1984, DUNE_2021]})
+
+        summary = resolve_library(session, catalogue)
+
+        assert summary.unresolved == 1
+        assert summary.remaining == 0
+
+    def test_an_answer_we_already_have_does_not_consume_the_limit(self, session: Session, watched):
+        """Otherwise a batch could spend its whole allowance walking past
+        questions it was never going to ask about."""
+        for index in range(5):
+            watched(f"Film {index}")
+        catalogue = EchoCatalogue()
+        resolve_library(session, catalogue)
+
+        watched("Something New")
+        resolve_library(session, catalogue, limit=1)
+
+        assert catalogue.searched[-1] == "Something New"
+        assert len(catalogue.searched) == 6
+
+    def test_a_batch_that_searches_nothing_still_links_rows_imported_later(
+        self, session: Session, watched
+    ):
+        """The reason a spent allowance skips the search rather than abandoning
+        the walk.
+
+        The order matters, and it is the whole point of the test: an unanswered
+        question comes first and an answered one after it. A batch that stopped
+        at the first question it could not afford would never reach the second,
+        and the row imported against it would wait for whichever future batch
+        happened to get that far.
+        """
+        watched("Zebra")
+        late_answer = watched("Inception")
+        catalogue = FakeCatalogue({"Inception": [INCEPTION]})
+        resolve_library(session, catalogue)
+        assert late_answer.title_id is not None
+
+        late = watched("Inception")
+        # retry_unresolved is what puts the refusal back in front of the
+        # allowance; without it Zebra is skipped for free and never blocks.
+        resolve_library(session, catalogue, limit=0, retry_unresolved=True)
+
+        session.refresh(late)
+        assert late.title_id is not None
+        assert len(catalogue.searched) == 2
+
+
+class TestOnePageOfTheQueue:
+    """The queue can be hundreds long and every row carries its own list of
+    rejected candidates, so it is served a page at a time."""
+
+    def refuse(self, session: Session, watched, count: int) -> None:
+        for index in range(count):
+            watched(f"Puzzle {index:02d}")
+        resolve_library(session, FakeCatalogue(default=[DUNE_1984, DUNE_2021]))
+
+    def test_reports_the_length_of_the_whole_queue_not_of_the_page(self, session: Session, watched):
+        """A page that only knew its own size could not say "25 of 214", and a
+        caller could not tell whether to ask for another."""
+        self.refuse(session, watched, 7)
+
+        page = unresolved_page(session, limit=3)
+
+        assert page.total == 7
+        assert len(page.items) == 3
+
+    def test_an_offset_moves_the_window(self, session: Session, watched):
+        self.refuse(session, watched, 7)
+
+        first = unresolved_page(session, limit=3)
+        second = unresolved_page(session, limit=3, offset=3)
+
+        assert [item.query_title for item in first.items] != [
+            item.query_title for item in second.items
+        ]
+        assert second.total == 7
+
+    def test_the_pages_together_are_the_whole_list_in_the_same_order(
+        self, session: Session, watched
+    ):
+        self.refuse(session, watched, 7)
+        whole = [title.query_title for title in unresolved_titles(session)]
+
+        paged: list[str] = []
+        for offset in range(0, 9, 3):
+            paged += [
+                item.query_title for item in unresolved_page(session, limit=3, offset=offset).items
+            ]
+
+        assert paged == whole
+
+    def test_no_limit_is_the_whole_queue(self, session: Session, watched):
+        self.refuse(session, watched, 7)
+
+        assert len(unresolved_page(session).items) == 7
+
+    def test_an_offset_past_the_end_is_an_empty_page_rather_than_an_error(
+        self, session: Session, watched
+    ):
+        self.refuse(session, watched, 3)
+
+        page = unresolved_page(session, limit=3, offset=99)
+
+        assert page.items == []
+        assert page.total == 3
+
+    def test_an_empty_queue_is_a_page_of_nothing(self, session: Session):
+        page = unresolved_page(session, limit=3)
+
+        assert page.total == 0
+        assert page.items == []
+
+
+class TestWhatWasAlreadyDecided:
+    """Once a person answers a question it leaves the queue, so without this
+    there is no way back to a decision they got wrong."""
+
+    def decide(
+        self,
+        session: Session,
+        watched,
+        title: str,
+        node_id: str,
+        *,
+        when: datetime | None = None,
+    ) -> int:
+        watched(title)
+        resolve_library(session, FakeCatalogue(default=[DUNE_1984, DUNE_2021]))
+        resolution = session.scalars(
+            select(TitleResolution).where(TitleResolution.query_title == title)
+        ).one()
+        resolve_manually(
+            session,
+            FakeLookup({"tm84": DUNE_1984, "tm21": DUNE_2021}),
+            resolution_id=resolution.id,
+            node_id=node_id,
+            now=when,
+        )
+        return resolution.id
+
+    def test_lists_what_a_person_chose(self, session: Session, watched):
+        self.decide(session, watched, "Dune", "tm21")
+
+        decided = recent_resolutions(session)
+
+        assert [entry.query_title for entry in decided] == ["Dune"]
+        assert decided[0].title == "Dune"
+        assert decided[0].release_year == 2021
+
+    def test_leaves_out_what_the_matcher_decided_on_its_own(self, session: Session, watched):
+        """Only a choice somebody made is a choice somebody might want back."""
+        watched("Inception")
+        resolve_library(session, FakeCatalogue({"Inception": [INCEPTION]}))
+
+        assert recent_resolutions(session) == []
+
+    def test_most_recently_decided_first(self, session: Session, watched):
+        self.decide(session, watched, "Dune", "tm21", when=DECIDED_FIRST)
+        self.decide(session, watched, "Arrakis", "tm84", when=DECIDED_SECOND)
+
+        assert [entry.query_title for entry in recent_resolutions(session)] == [
+            "Arrakis",
+            "Dune",
+        ]
+
+    def test_changing_a_decision_moves_it_back_to_the_top(self, session: Session, watched):
+        """Otherwise the list is ordered by when the matcher gave up rather than
+        by when anybody decided, and the fix somebody just made is nowhere near
+        the top of the list they are looking at."""
+        first = self.decide(session, watched, "Dune", "tm21", when=DECIDED_FIRST)
+        self.decide(session, watched, "Arrakis", "tm84", when=DECIDED_SECOND)
+
+        resolve_manually(
+            session,
+            FakeLookup({"tm84": DUNE_1984}),
+            resolution_id=first,
+            node_id="tm84",
+            now=DECIDED_THIRD,
+        )
+
+        assert recent_resolutions(session)[0].query_title == "Dune"
+
+    def test_the_decision_is_dated_when_it_was_made(self, session: Session, watched):
+        """Pinned directly rather than through the ordering it produces. Real
+        time happens to sort these correctly even when the clock argument is
+        ignored, so the order alone proves nothing about the stamp."""
+        self.decide(session, watched, "Dune", "tm21", when=DECIDED_FIRST)
+
+        assert recent_resolutions(session)[0].resolved_at == DECIDED_FIRST
+
+    def test_keeps_only_the_most_recent_few(self, session: Session, watched):
+        for index in range(5):
+            self.decide(session, watched, f"Puzzle {index}", "tm21")
+
+        assert len(recent_resolutions(session, limit=2)) == 2
+
+    def test_carries_enough_to_show_it_and_to_change_it(self, session: Session, watched):
+        resolution_id = self.decide(session, watched, "Dune", "tm21")
+
+        entry = recent_resolutions(session)[0]
+
+        assert entry.resolution_id == resolution_id
+        assert entry.title_id is not None
+        assert entry.object_type == "MOVIE"
+        # What the matcher was choosing between, so a change of mind re-picks
+        # from the same list rather than from a blank search box.
+        assert [candidate["node_id"] for candidate in entry.candidates] == ["tm84", "tm21"]
+
+    def decide_on_its_own_title(self, session: Session, watched, index: int) -> None:
+        """One decision pointing at a title of its own.
+
+        Distinct on purpose. Six decisions that all chose the same film cost one
+        lazy load between them however many rows there are, because the second
+        one finds the title already in the identity map -- so a list of repeats
+        cannot tell a join from a query per row.
+        """
+        entry = CatalogueEntry(node_id=f"tm{index}", title=f"Puzzle {index}", object_type="MOVIE")
+        watched(f"Puzzle {index}")
+        resolve_library(session, FakeCatalogue(default=[DUNE_1984, DUNE_2021]))
+        resolution = session.scalars(
+            select(TitleResolution).where(TitleResolution.query_title == f"Puzzle {index}")
+        ).one()
+        resolve_manually(
+            session,
+            FakeLookup({entry.node_id: entry}),
+            resolution_id=resolution.id,
+            node_id=entry.node_id,
+        )
+
+    def test_a_longer_list_is_not_more_queries(self, session: Session, watched, counting):
+        self.decide_on_its_own_title(session, watched, 0)
+        # Expired first, deliberately. These rows were written by this very
+        # session, so the titles sit loaded in its identity map and following
+        # the relationship would cost nothing -- which is exactly the state a
+        # real request is never in. Without this the test passes whether the
+        # titles are loaded with the resolutions or one query at a time.
+        session.expire_all()
+        with counting() as few:
+            recent_resolutions(session)
+
+        for index in range(1, 6):
+            self.decide_on_its_own_title(session, watched, index)
+        session.expire_all()
+        with counting() as many:
+            recent_resolutions(session)
+
+        assert few
+        assert len(many) == len(few)
+
+
+class TestSearchingByHand:
+    """The stored candidates are what the matcher already weighed, so when the
+    right answer was never among them -- a typo in the export, a title known by
+    another name here -- there has to be a way to go and look."""
+
+    def test_asks_the_catalogue_for_what_was_typed(self):
+        catalogue = FakeCatalogue({"Arrival": [INCEPTION]})
+
+        search_candidates(catalogue, "Arrival")
+
+        assert catalogue.searched == ["Arrival"]
+
+    def test_returns_what_came_back_as_candidates(self):
+        catalogue = FakeCatalogue({"Dune": [DUNE_1984, DUNE_2021]})
+
+        found = search_candidates(catalogue, "Dune")
+
+        assert [candidate.node_id for candidate in found] == ["tm84", "tm21"]
+        assert found[0].release_year == 1984
+
+    def test_narrows_to_films_when_that_is_the_kind_asked_for(self):
+        catalogue = FakeCatalogue(default=[INCEPTION])
+
+        search_candidates(catalogue, "Dune", kind=TitleKind.MOVIE)
+
+        assert catalogue.search_types == [("MOVIE",)]
+
+    def test_narrows_to_shows_for_an_episode(self):
+        """A history row is an episode because that is what was watched; the
+        catalogue entry is a show because that is what exists."""
+        catalogue = FakeCatalogue(default=[THE_OFFICE])
+
+        search_candidates(catalogue, "The Office", kind=TitleKind.EPISODE)
+
+        assert catalogue.search_types == [("SHOW",)]
+
+    def test_narrows_nothing_when_no_kind_is_given(self):
+        """The parser's reading of a title is itself a common reason a row
+        needed fixing, so a filter derived from it is exactly what would hide
+        the right answer."""
+        catalogue = FakeCatalogue(default=[INCEPTION])
+
+        search_candidates(catalogue, "Dune")
+
+        assert catalogue.search_types == [None]

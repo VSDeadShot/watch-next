@@ -64,8 +64,10 @@ NUMBER_MISMATCH_PENALTY = 0.30
 # year this close is treated as agreement rather than as a contradiction.
 YEAR_TOLERANCE = 1
 
-# What JustWatch calls the two kinds of thing we can match against.
-_OBJECT_TYPE_FOR_KIND = {TitleKind.MOVIE: "MOVIE", TitleKind.EPISODE: "SHOW"}
+# What JustWatch calls the two kinds of thing we can match against. Note the
+# asymmetry in the names: a history row is an *episode*, because that is what was
+# watched, while the catalogue entry is a *show*, because that is what exists.
+OBJECT_TYPE_FOR_KIND = {TitleKind.MOVIE: "MOVIE", TitleKind.EPISODE: "SHOW"}
 
 
 class MatchMethod(StrEnum):
@@ -174,6 +176,22 @@ def match_title(query: MatchQuery, candidates: Sequence[Candidate]) -> MatchResu
     )
 
 
+def object_types_for(kind: TitleKind | None) -> tuple[str, ...]:
+    """What to ask the catalogue for when looking one kind of thing up.
+
+    ``None`` means do not narrow it at all, and that is the honest default for a
+    search somebody is typing by hand: the parser's reading of a title is itself
+    a common reason a row needed fixing, so a filter derived from that reading
+    is exactly the thing that would hide the right answer. The automatic pass
+    narrows nothing for the same reason and lets the matcher weigh the kind
+    afterwards.
+    """
+    if kind is None:
+        return ()
+    found = OBJECT_TYPE_FOR_KIND.get(kind)
+    return (found,) if found else ()
+
+
 def _score(query: MatchQuery, candidate: Candidate) -> ScoredCandidate:
     """Score one candidate. Deliberately not clamped to 1.
 
@@ -233,7 +251,7 @@ def _number_tokens(normalized: str) -> frozenset[str]:
 
 
 def _kind_adjustment(query: MatchQuery, candidate: Candidate) -> float:
-    if candidate.object_type == _OBJECT_TYPE_FOR_KIND.get(query.kind):
+    if candidate.object_type == OBJECT_TYPE_FOR_KIND.get(query.kind):
         return KIND_BONUS
     # The parser guessed rather than proved, so the catalogue is the better
     # authority and disagreeing with our guess costs nothing.
