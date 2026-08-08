@@ -48,7 +48,8 @@ backend/          FastAPI + SQLAlchemy. Independent project, own pyproject.toml.
   tests/          Mirrors the modules. fixtures/ is hand-written and anonymized.
   scripts/        smoke_justwatch.py — manual live check, NOT part of the suite.
 frontend/         Next.js App Router + TypeScript + Tailwind 4. Independent project.
-  app/            Routes.  components/  Flat, no subdirectories.  lib/  api.ts, types.ts.
+  app/            Routes.  components/  Flat, no subdirectories.
+  lib/            api.ts (the only fetch), types.ts (mirrors the schemas), format.ts.
 ```
 
 No root `package.json`. The two projects are built, tested and deployed separately.
@@ -57,8 +58,8 @@ No root `package.json`. The two projects are built, tested and deployed separate
 
 This is the most load-bearing decision in the repo. Everything genuinely interesting —
 title parsing, normalization, fuzzy matching, taste profiling, mood weights, scoring, the
-availability rule, the streaming YouTube parser — lives in `app/core/` and is testable
-with no database, no network and no mocking.
+availability rule, the history counting, the streaming YouTube parser — lives in
+`app/core/` and is testable with no database, no network and no mocking.
 
 - `core/` takes data in and returns data out. It imports nothing from `app.services`,
   `app.api`, `app.models` or `app.db`. `now` is a parameter, never `datetime.now()`.
@@ -79,7 +80,7 @@ Always use the venv interpreter — **not** the system Python.
 
 ```bash
 # Backend, from backend/
-./.venv/Scripts/python.exe -m pytest                    # 805 tests, all offline
+./.venv/Scripts/python.exe -m pytest                    # 945 tests, all offline
 ./.venv/Scripts/python.exe -m ruff check .
 ./.venv/Scripts/python.exe -m ruff format --check .
 ./.venv/Scripts/alembic.exe upgrade head                # before first run, and after pulling
@@ -139,19 +140,32 @@ and is run by hand because JustWatch is an unofficial API that can change withou
 ```
 POST   /api/imports/netflix           multipart; the raw Takeout .zip or a bare .csv
 POST   /api/imports/youtube           multipart; watch-history.json, streamed with ijson
-POST   /api/titles/resolve            resolve distinct titles against JustWatch
-GET    /api/titles/unresolved         what the matcher declined, worst first
+POST   /api/titles/resolve            resolve distinct titles against JustWatch; ?limit=
+GET    /api/titles/unresolved         what the matcher declined, worst first; ?limit=&offset=
+GET    /api/titles/search             free catalogue search; ?q= (>=2 chars), optional ?kind=
+GET    /api/titles/resolutions        the recently decided-by-hand, newest first
 PUT    /api/titles/resolutions/{id}   decide one by hand
 GET    /api/providers                 the catalogue for the country
 POST   /api/providers/refresh
 GET    /api/providers/mine            PUT replaces the whole set in one request
 POST   /api/recommend                 the product
 GET    /api/watchlist                 POST adds; PATCH ticks off or edits a note; DELETE removes
+GET    /api/stats                     what the history adds up to, and how much of it is unmatched
 GET    /health
 ```
 
 Watchlist routes are keyed by `title_id` rather than the row's own id — it is what a
 caller already has, and there is at most one entry per title.
+
+`resolve`'s `limit` counts **searches spent, not questions considered**. A question whose
+answer is already stored is applied and skipped for free, and once the allowance runs out
+the pass keeps going rather than stopping — so rows imported after their answer was
+cached still get linked. It returns `remaining`, which is how a caller knows to ask for
+another batch. **A batch whose every search failed does not reduce `remaining`**, so a
+caller must stop on `failed == searched` too, or it will loop for as long as JustWatch is
+down. `search` exists for the case the matcher could never have got right — a misspelled
+export, a regional name — and runs only when asked, never per keystroke, because every
+call is a real request against an API we pace at one a second by choice.
 
 ## Testing
 
@@ -197,10 +211,17 @@ API tests use `TestClient` with `get_db` and `get_settings` overridden in a fixt
 - **`NEXT_PUBLIC_API_BASE_URL` is baked into the client bundle at build time.** Nothing
   secret may ever go in `frontend/.env.example` or `.env.local`.
 - **Components are flat** in `components/`, with no subdirectories.
-- **The nav is full.** Four one-word labels is the measured ceiling at 360px — "Your
-  list" and "List" were both tried and overflowed the bar. A fifth link needs the nav
-  rethought, not appended. `components/Nav.tsx` records this; read it before adding a
-  route.
+- **Six routes**: `/` (the answer), `/watchlist`, `/stats`, `/import`, `/settings` and
+  `/resolve`. The first five are the nav; `/resolve` deliberately is not. It is a chore
+  rather than a place — it exists while something is unmatched and never again once the
+  queue is empty — so it is reached from the two screens that already know there is a
+  problem, the import summary and the stats page.
+- **The nav is two rows below `sm`, one row above it.** Four one-word labels beside the
+  wordmark was the measured ceiling at 360px ("Your list" and "List" were both tried and
+  overflowed), so the fifth link moved the labels onto their own line rather than behind a
+  menu nobody would find. That lifts the ceiling instead of working around it, at a cost
+  of about thirty pixels of sticky header on a phone. `components/Nav.tsx` records the
+  reasoning and both measured underline offsets; read it before adding a route.
 - Mobile is checked at 320 / 360 / 390 / 414px by embedding the page in an iframe of that
   width. `resize_window` is ignored by the Windows window manager and proves nothing.
 - Only routes that exist are linked. A nav that points at a 404 to look finished is worse
@@ -237,8 +258,9 @@ JustWatch data comes from an unofficial community wrapper whose terms permit
 
 - A title of unknown runtime still passes a stated time budget (`fits(None)` is true, so
   that most series are not dropped), and the reasons do not admit the length is unknown.
-- `recommender._pool` and the taste profile read their whole tables into memory — a sharp
-  contrast with the YouTube importer, which holds nothing, and the watchlist, which
-  batches its lookups.
+- `recommender._pool`, the taste profile and `services/stats._sessions` all read their
+  whole tables into memory — a sharp contrast with the YouTube importer, which holds
+  nothing, and the watchlist, which batches its lookups. Worth fixing in all three at
+  once rather than one at a time.
 - A watch event whose title was never resolved cannot exclude anything from the pool. The
   fix is resolving the row, not guessing here.
