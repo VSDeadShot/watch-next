@@ -89,9 +89,20 @@ export default function ImportSummaryCard({
       )}
 
       <footer className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line px-5 py-4">
+        {/* Matching first, because nothing downstream works without it. The
+            export gives us a name and nothing else -- until those names are
+            matched against the catalogue there are no genres, no runtimes and
+            nothing to recommend from. Picking services matters too, and comes
+            second because it does not block anything. */}
+        <Link
+          href="/resolve"
+          className="bg-white px-4 py-1.5 text-sm font-medium text-ink transition-opacity hover:opacity-90"
+        >
+          Match these titles
+        </Link>
         <Link
           href="/settings"
-          className="bg-white px-4 py-1.5 text-sm font-medium text-ink transition-opacity hover:opacity-90"
+          className="text-sm text-muted underline underline-offset-4 transition-colors hover:text-white"
         >
           Pick your services
         </Link>

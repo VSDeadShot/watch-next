@@ -453,6 +453,10 @@ class TestWhatWasDecidedByHand:
         assert decision["query_title"] == "Dune"
         assert decision["title"] == "Dune"
         assert decision["release_year"] == 2021
+        # The candidates are keyed by this, so it is what lets a client mark
+        # which button is the one currently in force.
+        assert decision["jw_node_id"] == "tm21"
+        assert decision["jw_node_id"] in {c["node_id"] for c in decision["candidates"]}
 
     def test_carries_the_rejected_candidates_so_the_choice_can_be_made_again(
         self, client: TestClient, watched

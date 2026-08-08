@@ -265,6 +265,11 @@ class ResolvedTitle:
     query_title: str
     kind: TitleKind
     title_id: int
+    # The catalogue's own id, which is what the stored candidates are keyed by.
+    # Without it a client can only guess which button it chose by comparing the
+    # title and the year -- and the queue asks about a title precisely when two
+    # entries look alike on both.
+    jw_node_id: str
     title: str
     object_type: str
     release_year: int | None
@@ -334,6 +339,7 @@ def recent_resolutions(
             query_title=row.query_title,
             kind=row.kind,
             title_id=row.title.id,
+            jw_node_id=row.title.jw_node_id,
             title=row.title.title,
             object_type=row.title.object_type,
             release_year=row.title.release_year,

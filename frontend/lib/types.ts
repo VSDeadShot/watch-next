@@ -241,3 +241,78 @@ export interface Stats {
    *  act on: resolve the library, or decide a few by hand. */
   unresolved_sessions: number;
 }
+
+/** One option for what a title might be. Mirrors `TitleCandidate`. */
+export interface TitleCandidate {
+  node_id: string;
+  title: string;
+  object_type: string;
+  /** Not decoration: two films called Dune are otherwise indistinguishable,
+   *  and telling them apart is the whole job being handed to a person. */
+  release_year: number | null;
+}
+
+/** `POST /api/titles/resolve` -- what one batch of matching did. */
+export interface ResolveSummary {
+  searched: number;
+  resolved: number;
+  /** Asked, and the answer was unclear. These go to the queue below. */
+  unresolved: number;
+  /** Could not ask at all. Retried by the next batch, which is why a run of
+   *  these means stopping rather than carrying on. */
+  failed: number;
+  linked_events: number;
+  /** What a further batch would still ask about. Zero means finished. */
+  remaining: number;
+}
+
+/** One title the matcher declined, and everything needed to decide it. */
+export interface UnresolvedTitle {
+  resolution_id: number;
+  query_title: string;
+  kind: string;
+  reason: string;
+  /** How many sittings are waiting on this one answer -- which is what makes
+   *  one chore in the queue worth more than another. */
+  event_count: number;
+  candidates: TitleCandidate[];
+}
+
+/** `GET /api/titles/unresolved` -- one page, and the length of the queue. */
+export interface UnresolvedPage {
+  total: number;
+  items: UnresolvedTitle[];
+}
+
+/** `GET /api/titles/resolutions` -- something already decided by hand. */
+export interface ResolvedTitle {
+  resolution_id: number;
+  query_title: string;
+  kind: string;
+  title_id: number;
+  /** What the candidates are keyed by, so the one in force can be marked
+   *  rather than guessed at from the title and the year -- which are the two
+   *  things that looked alike when the question was asked. */
+  jw_node_id: string;
+  title: string;
+  object_type: string;
+  release_year: number | null;
+  poster_url: string | null;
+  resolved_at: string;
+  /** The rejected options, kept so a change of mind starts from the same list
+   *  rather than from an empty search box. */
+  candidates: TitleCandidate[];
+}
+
+/** `PUT /api/titles/resolutions/{id}` -- what one decision settled on. */
+export interface ManualResolution {
+  resolution_id: number;
+  title_id: number;
+  jw_node_id: string;
+  title: string;
+  object_type: string;
+  release_year: number | null;
+  poster_url: string | null;
+  /** How many sittings that one answer linked. */
+  linked_events: number;
+}

@@ -178,6 +178,7 @@ def decided(
             query_title=decision.query_title,
             kind=decision.kind,
             title_id=decision.title_id,
+            jw_node_id=decision.jw_node_id,
             title=decision.title,
             object_type=decision.object_type,
             release_year=decision.release_year,

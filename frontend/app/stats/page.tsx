@@ -303,9 +303,15 @@ function Unresolved({
       </p>
       <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted">
         {nothingMatched
-          ? "Until they are matched there is nothing to count: the genres, runtimes and dates all come from the catalogue rather than from the export. Matching runs against JustWatch and has no page of its own yet."
+          ? "Until they are matched there is nothing to count: the genres, runtimes and dates all come from the catalogue rather than from the export."
           : "They are in none of the numbers above, so this page is describing slightly less than you have watched. The rest were matched to the catalogue and are counted."}
       </p>
+      <Link
+        href="/resolve"
+        className="mt-4 inline-block bg-white px-4 py-2 text-sm font-medium text-ink transition-opacity hover:opacity-90"
+      >
+        {nothingMatched ? "Match them" : "Sort them out"}
+      </Link>
     </div>
   );
 }

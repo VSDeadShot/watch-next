@@ -113,6 +113,10 @@ class ResolvedTitleResponse(BaseModel):
     query_title: str
     kind: str
     title_id: int
+    # What the candidates are keyed by, so a client can mark the one in force
+    # rather than inferring it from the title and the year -- which are exactly
+    # the two things that looked alike when the question was asked.
+    jw_node_id: str
     title: str
     object_type: str
     release_year: int | None = None
