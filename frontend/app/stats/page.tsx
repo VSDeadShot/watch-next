@@ -183,7 +183,10 @@ export default function StatsPage() {
         // recommendation -- but a magic 48px said so in a language nothing
         // else on this page speaks.
         <section className="mt-8 border-t border-line pt-8">
-          <h2 className="text-lg font-medium">YouTube</h2>
+          {/* The same size as every other section heading on the page. The
+              rule above it already says this is a different kind of thing, and
+              saying it twice cost the page its one inconsistent type size. */}
+          <h2 className="text-base font-medium">YouTube</h2>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted">
             Kept apart from the rest on purpose. This is a signal about what you
             like, never something the app will tell you to watch — nobody needs an
