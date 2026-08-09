@@ -5,7 +5,15 @@ See ``.env.example`` for the full list with sensible defaults.
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Schemes a hosted Postgres hands out that SQLAlchemy cannot use as given.
+#: ``postgres://`` is the spelling SQLAlchemy 2 dropped support for outright,
+#: and a bare ``postgresql://`` has no driver in it, which since psycopg2 is no
+#: longer the default means no driver at all.
+_DRIVERLESS_POSTGRES = ("postgresql://", "postgres://")
+_POSTGRES_DRIVER = "postgresql+psycopg://"
 
 
 class Settings(BaseSettings):
@@ -31,6 +39,27 @@ class Settings(BaseSettings):
     # deployment and the API stops answering strangers. See app/api/security.py
     # for why CORS is not a substitute for this.
     api_secret: str = ""
+
+    @field_validator("database_url")
+    @classmethod
+    def _name_the_driver(cls, value: str) -> str:
+        """Make a provider's connection string usable without editing it.
+
+        Neon, Render and Heroku all hand out a URL with no driver in the scheme,
+        and SQLAlchemy rejects it at ``create_engine`` -- which is at import, so
+        the failure is a stack trace about dialects rather than anything that
+        mentions configuration. Rewriting only the scheme leaves the credentials
+        and the query string exactly as they came, which matters because
+        ``?sslmode=require`` is not optional on Neon and a password is allowed
+        to contain anything.
+
+        A URL that already names a driver is left alone: somebody who asked for
+        asyncpg has said so, and is not helped by being overruled.
+        """
+        for scheme in _DRIVERLESS_POSTGRES:
+            if value.startswith(scheme):
+                return _POSTGRES_DRIVER + value[len(scheme) :]
+        return value
 
 
 @lru_cache

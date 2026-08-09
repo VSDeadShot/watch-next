@@ -7,6 +7,10 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "sqlalchemy>=2.0",
+    # The driver for every deployed database. Absent until now because nothing
+    # but SQLite had ever been connected to; `postgresql+psycopg://` needs it.
+    # The binary wheel avoids needing libpq and a compiler on the build host.
+    "psycopg[binary]>=3.2",
     "alembic>=1.14",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",

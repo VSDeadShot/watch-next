@@ -11,11 +11,25 @@ from app.config import get_settings
 
 settings = get_settings()
 
+_is_sqlite = settings.database_url.startswith("sqlite")
+
 # SQLite refuses connections across threads by default, and FastAPI serves
 # requests from a thread pool. Harmless on Postgres, which ignores it.
-_connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+_connect_args = {"check_same_thread": False} if _is_sqlite else {}
 
-engine = create_engine(settings.database_url, connect_args=_connect_args)
+# A hosted Postgres closes connections we still believe we hold. Neon suspends
+# an idle database and drops everything attached to it, and a pool handing out
+# one of those afterwards fails the *next* request rather than the idle period
+# -- which reads as a random 500 with nothing in the logs tying it to the gap.
+#
+# `pool_pre_ping` catches it on checkout with a throwaway SELECT, and the
+# recycle discards connections before they are old enough to have been dropped.
+# Both are Postgres-shaped problems and neither applies to a local file, which
+# is the one place this file has ever needed to know which backend it is on
+# besides the thread check above.
+_pool_args = {} if _is_sqlite else {"pool_pre_ping": True, "pool_recycle": 300}
+
+engine = create_engine(settings.database_url, connect_args=_connect_args, **_pool_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

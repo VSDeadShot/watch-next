@@ -1,0 +1,89 @@
+# Render's blueprint for the backend. The frontend is on Vercel and is not
+# described here.
+#
+# Everything secret is `sync: false`, which means Render prompts for it once and
+# stores it itself. Nothing in this file is a credential, and nothing in it may
+# become one -- this repository is public and its whole subject is somebody's
+# viewing history.
+
+services:
+  - type: web
+    name: watch-next-api
+    runtime: python
+    # Change this if the service is on a paid instance type; see the note about
+    # migrations below, which is the one thing the free tier changes.
+    plan: free
+    rootDir: backend
+    healthCheckPath: /health
+
+    buildCommand: pip install .
+
+    # --- One worker, and it is not an oversight -------------------------------
+    #
+    # The JustWatch client paces itself at one request a second, and it does so
+    # with a lock and a timestamp held in the process (see
+    # `services/justwatch_client.py`, `_wait_for_turn`). That is correct for one
+    # process and meaningless across several: two workers do not coordinate, so
+    # `--workers 2` is two requests a second to an unofficial API we chose to be
+    # polite to, and four is four.
+    #
+    # `get_catalogue` is `lru_cache`d for the same reason -- one client per
+    # process, so the limiter has something to remember.
+    #
+    # So the concurrency is deliberate rather than a default nobody revisited.
+    # Raising it is a decision to make the app rude, and needs the limiter moved
+    # somewhere shared first.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    numInstances: 1
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+
+      # Neon's connection string, pasted exactly as their console gives it.
+      # `config.py` names the driver and leaves the rest alone, so it does not
+      # need editing -- and `?sslmode=require` must survive, which is why.
+      - key: DATABASE_URL
+        sync: false
+
+      # The shared secret the Vercel proxy presents as X-API-Key. Without it
+      # this API answers anybody who finds the URL: one user, no login. See
+      # `app/api/security.py`.
+      - key: API_SECRET
+        sync: false
+
+      # Only reachable through the Vercel proxy, which is server-to-server, so
+      # no browser makes a cross-origin call to this service and CORS never
+      # comes into it. Set for completeness rather than for protection -- CORS
+      # is a browser policy and was never access control. A useful consequence:
+      # Vercel preview deployments work without listing each preview URL here,
+      # because previews proxy server-side too.
+      - key: FRONTEND_ORIGIN
+        sync: false
+
+      - key: JW_COUNTRY
+        value: IN
+      - key: JW_LANGUAGE
+        value: en
+
+    # --- Migrations ----------------------------------------------------------
+    #
+    # Alembic owns the schema and the app never calls `create_all`, so a new
+    # database is empty until `alembic upgrade head` has run against it.
+    #
+    # On a paid instance type this belongs here, where the platform runs it at
+    # the right moment and a failure stops the deploy:
+    #
+    #   preDeployCommand: alembic upgrade head
+    #
+    # It is commented out because Render does not offer pre-deploy commands on
+    # the free tier, and a blueprint that silently ignores a field is worse than
+    # one that says what it is not doing. Until then, migrations are run by hand
+    # from a checkout with DATABASE_URL pointed at the deployed database:
+    #
+    #   DATABASE_URL='<the Neon URL>' ./.venv/Scripts/alembic.exe upgrade head
+    #
+    # A startup hook was considered and rejected. Several workers would race,
+    # a failure would leave a half-started service rather than a stopped deploy,
+    # and it couples "the app booted" to "the schema changed" -- which is
+    # exactly the coupling that keeping Alembic in charge is meant to avoid.
