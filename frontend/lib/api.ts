@@ -7,8 +7,12 @@
  * "something went wrong" for a message the backend had already written properly.
  */
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+/**
+ * Same origin, always. `app/api/[...path]/route.ts` forwards to the backend
+ * with a secret the browser is never given, so there is no base URL to
+ * configure here and nothing to bake into the bundle at build time -- moving
+ * the backend is a server-side environment variable and not a rebuild.
+ */
 
 /** A request that reached the backend and came back a failure. */
 export class ApiError extends Error {
@@ -46,18 +50,25 @@ export async function apiRequest<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+    response = await fetch(path, { ...init, headers });
   } catch {
-    // fetch only rejects when the request never completed: the server is down,
-    // the port is wrong, CORS refused it. Named separately from an HTTP failure
-    // because the fix is different and it is the likeliest thing to go wrong
-    // while somebody is running this locally.
+    // fetch only rejects when the request never completed. Same origin as the
+    // page now, so reaching this means the site itself is unreachable rather
+    // than the API -- offline, or the dev server stopped.
     throw new ApiUnreachableError(
-      `Could not reach the backend at ${API_BASE_URL}. Is it running?`,
+      "Could not reach the app. Check your connection and try again.",
     );
   }
 
   if (!response.ok) {
+    // The proxy sets this when it could not reach the backend at all, which
+    // arrives here as an ordinary 502 and would otherwise be indistinguishable
+    // from the backend answering with one. Keeping the two apart is the whole
+    // reason these are separate classes: "start the backend" and "the backend
+    // is unhappy" have nothing to do with each other.
+    if (response.headers.get("x-proxy-unreachable")) {
+      throw new ApiUnreachableError(await readError(response));
+    }
     throw new ApiError(response.status, await readError(response));
   }
 

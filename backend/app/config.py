@@ -25,6 +25,13 @@ class Settings(BaseSettings):
 
     frontend_origin: str = "http://localhost:3000"
 
+    # The shared secret the Next.js proxy presents, and the browser never sees.
+    # Empty means the gate stands aside, which is the local default: a checkout
+    # runs with no credential and behaves as it always has. Set it in the
+    # deployment and the API stops answering strangers. See app/api/security.py
+    # for why CORS is not a substitute for this.
+    api_secret: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
