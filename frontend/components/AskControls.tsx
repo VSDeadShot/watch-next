@@ -107,7 +107,7 @@ export default function AskControls({
   // pushed the recommendation most of a laptop screen down, which is a strange
   // thing for an app whose promise is that you open it and are told.
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <Row label="In the mood for">
         {MOODS.map((option) => (
           <Chip
@@ -121,7 +121,7 @@ export default function AskControls({
         ))}
       </Row>
 
-      <div className="flex flex-wrap gap-x-10 gap-y-5">
+      <div className="flex flex-wrap gap-x-8 gap-y-4">
         <Row label="Time you have">
           {BUDGETS.map((option) => (
             <Chip
@@ -152,6 +152,22 @@ export default function AskControls({
   );
 }
 
+/**
+ * A label and its chips, on one line.
+ *
+ * The label used to have a line to itself, and the two of them were 39% of the
+ * height this question spent before the answer began -- for words nobody needs
+ * to read. "Surprise me / Laugh / Thrill" is obviously a mood and "No rush / 30
+ * min" is obviously a time; the label is orientation rather than information,
+ * so it sits beside the chips rather than above them. The chips themselves are
+ * untouched: they are what a thumb presses on a phone and they are already
+ * smaller than the guidance likes.
+ *
+ * The `legend` stays and goes to screen readers, because it is what makes these
+ * buttons a group rather than seven loose ones. The visible copy is a `span` on
+ * the chip line instead: a `legend` is laid out by the fieldset's own rules and
+ * cannot be put inline without fighting them.
+ */
 function Row({
   label,
   children,
@@ -161,8 +177,18 @@ function Row({
 }) {
   return (
     <fieldset className="min-w-0">
-      <legend className="mb-2 text-sm text-dim">{label}</legend>
-      <div className="flex flex-wrap gap-2">{children}</div>
+      <legend className="sr-only">{label}</legend>
+      {/* 6px between chips rather than 8, and `mr-1` on the label so it still
+          stands a little further off than they stand from each other. The two
+          pixels are not cosmetic: with 8px the mood row needed 698 and a 768px
+          tablet gives it 689, so seven chips became eight lines' worth of
+          height for the sake of nine pixels. */}
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2">
+        <span aria-hidden className="mr-1 text-[13px] text-dim">
+          {label}
+        </span>
+        {children}
+      </div>
     </fieldset>
   );
 }
