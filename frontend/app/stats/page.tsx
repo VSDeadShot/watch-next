@@ -150,7 +150,10 @@ export default function StatsPage() {
 
           <Panel title="What you came back to">
             {returnedTo.length > 0 ? (
-              <ul className="space-y-2.5">
+              // A measure rather than the panel's full width: at 918px the
+              // title and its count were 783px apart, and nothing ran between
+              // them to carry the eye across.
+              <ul className="max-w-lg space-y-2.5">
                 {returnedTo.map((entry) => (
                   <li
                     key={entry.title_id}

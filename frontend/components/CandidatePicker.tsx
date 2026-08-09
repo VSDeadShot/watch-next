@@ -69,7 +69,9 @@ export default function CandidatePicker({
   }
 
   return (
-    <div className="mt-3">
+    // Set apart from the row's description above it: everything higher up says
+    // what this title is, and everything from here down is the answer.
+    <div className="mt-5">
       {candidates.length > 0 && (
         <Options
           heading="What the matcher was choosing between"

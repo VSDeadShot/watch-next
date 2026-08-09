@@ -40,25 +40,31 @@ export default function BarList({
         <li
           key={entry.label}
           title={`${entry.label}: ${entry.count} ${entry.count === 1 ? unit : `${unit}s`}`}
-          className="flex items-center gap-3"
+          // Two rows on a phone, one from `sm` up. Splitting the width by
+          // percentage gave the bar the larger share at every phone size, and
+          // the labels that lost the argument -- "Action & Adventure",
+          // "Technology Connections" -- were the ones worth reading. The bar
+          // encodes a number that is also printed beside it; the label encodes
+          // nothing else anywhere. So the label gets the line.
+          className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-1.5 sm:grid-cols-[30%_minmax(0,1fr)_auto] sm:items-center"
         >
-          <span className="w-[38%] shrink-0 truncate text-sm sm:w-[30%]">
-            {entry.label}
+          <span className="truncate text-sm">{entry.label}</span>
+
+          {/* Tabular here, unlike a stat tile: this is a column of numbers that
+              has to line up down the right edge. Last in the row from `sm` up,
+              beside the label below it -- a number that has floated to the far
+              side of a phone is no longer next to the thing it counts. */}
+          <span className="w-8 text-right text-sm text-dim tabular-nums sm:order-3">
+            {entry.count}
           </span>
 
           {/* The track is a lighter step of the same monochrome ramp, so a
               short bar still reads as a short bar rather than as missing. */}
-          <span className="h-2 flex-1 bg-raised">
+          <span className="col-span-2 h-2 bg-raised sm:order-2 sm:col-span-1">
             <span
               className="block h-full rounded-r-[3px] bg-muted"
               style={{ width: `${Math.max((entry.count / largest) * 100, 2)}%` }}
             />
-          </span>
-
-          {/* Tabular here, unlike a stat tile: this is a column of numbers that
-              has to line up down the right edge. */}
-          <span className="w-8 shrink-0 text-right text-sm text-dim tabular-nums">
-            {entry.count}
           </span>
         </li>
       ))}

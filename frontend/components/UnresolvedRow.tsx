@@ -28,7 +28,7 @@ export default function UnresolvedRow({
   onPick: (nodeId: string) => void;
 }) {
   return (
-    <li className="border border-line bg-panel px-4 py-4 sm:px-5">
+    <li className="border border-line bg-panel px-4 py-5 sm:px-5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h3 className="text-[15px] font-medium">{title.query_title}</h3>
         <p className="text-sm text-dim">

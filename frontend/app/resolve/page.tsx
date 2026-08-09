@@ -158,7 +158,7 @@ export default function ResolvePage() {
               consequential are first — deciding a series you worked through
               fixes every episode of it at once.
             </p>
-            <ul className="mt-4 space-y-3">
+            <ul className="mt-4 space-y-6">
               {queue?.items.map((title) => (
                 <UnresolvedRow
                   key={title.resolution_id}
