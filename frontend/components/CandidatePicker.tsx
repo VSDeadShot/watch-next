@@ -95,7 +95,7 @@ export default function CandidatePicker({
         <button
           type="submit"
           disabled={searching || query.trim().length < 2}
-          className="border border-edge px-3 py-2 text-sm transition-colors hover:bg-raised disabled:opacity-40"
+          className="border border-edge px-3 py-2 text-sm transition-colors hover:border-white hover:bg-raised disabled:opacity-50"
         >
           {searching ? "Searching…" : "Search"}
         </button>
@@ -166,7 +166,7 @@ function Options({
                 disabled={busy || current}
                 onClick={() => onPick(option.node_id)}
                 aria-current={current ? "true" : undefined}
-                className={`border px-3 py-1.5 text-sm transition-colors disabled:opacity-40 ${
+                className={`border px-3 py-1.5 text-sm transition-colors disabled:opacity-50 ${
                   current
                     ? "border-edge bg-raised text-white"
                     : "border-line hover:border-edge hover:bg-raised"

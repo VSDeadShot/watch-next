@@ -155,7 +155,7 @@ export default function ResolveRunner({ onFinished }: { onFinished: () => void }
         type="button"
         onClick={() => void run()}
         disabled={running}
-        className="mt-4 bg-white px-4 py-2 text-sm font-medium text-ink transition-opacity hover:opacity-90 disabled:opacity-40"
+        className="mt-4 bg-white px-4 py-2 text-sm font-medium text-ink transition-opacity hover:opacity-90 disabled:opacity-50"
       >
         {running
           ? "Matching…"
@@ -190,7 +190,7 @@ function Bar({ done, left }: { done: number; left: number }) {
       aria-label="Titles looked up"
     >
       <div
-        className="h-full bg-white transition-[width] duration-500"
+        className="h-full bg-muted transition-[width] duration-500"
         style={{ width: `${Math.round(share * 100)}%` }}
       />
     </div>

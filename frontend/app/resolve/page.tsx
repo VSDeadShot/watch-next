@@ -224,7 +224,7 @@ function Pager({
         type="button"
         onClick={() => onMove(Math.max(offset - PAGE_SIZE, 0))}
         disabled={offset === 0}
-        className="border border-line px-3 py-1.5 text-sm transition-colors hover:border-edge disabled:opacity-30"
+        className="border border-edge px-3 py-1.5 text-sm transition-colors hover:border-white hover:bg-raised disabled:opacity-50"
       >
         Back
       </button>
@@ -232,7 +232,7 @@ function Pager({
         type="button"
         onClick={() => onMove(offset + PAGE_SIZE)}
         disabled={!more}
-        className="border border-line px-3 py-1.5 text-sm transition-colors hover:border-edge disabled:opacity-30"
+        className="border border-edge px-3 py-1.5 text-sm transition-colors hover:border-white hover:bg-raised disabled:opacity-50"
       >
         More
       </button>

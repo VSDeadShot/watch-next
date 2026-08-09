@@ -152,7 +152,7 @@ export default function SettingsPage() {
         </p>
       </header>
 
-      <section className="mt-10">
+      <section className="mt-8">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2 border-b border-line pb-3">
           <h2 className="text-base font-medium">
             Your services

@@ -97,37 +97,39 @@ export default function StatsPage() {
       )}
 
       {history && history.sessions > 0 && (
-        <>
-          <section className="mt-8">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <StatTile
-                label="Titles"
-                value={history.titles.toLocaleString()}
-                // "series" is already its own plural, so it does not go
-                // through the naive pluraliser.
-                hint={`${count(history.movies, "film")}, ${history.series} series`}
-              />
-              <StatTile
-                label="Times you sat down"
-                value={history.sessions.toLocaleString()}
-                hint="An episode is a sitting. A binge is one title and many of these."
-              />
-              <StatTile
-                wide
-                label="Time watched"
-                value={
-                  history.minutes_watched === null
-                    ? "—"
-                    : watchTime(history.minutes_watched)
-                }
-                hint={timeHint(
-                  history.minutes_watched,
-                  history.sessions_timed,
-                  history.sessions,
-                )}
-              />
-            </div>
-          </section>
+        // The spacing between these blocks is owned here rather than by
+        // each panel. A margin on a child adds to the gap of any grid it
+        // sits in, which is how the two side-by-side panels below ended up
+        // 32px apart on a phone while every other pair on the page was 16.
+        <section className="mt-8 space-y-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <StatTile
+              label="Titles"
+              value={history.titles.toLocaleString()}
+              // "series" is already its own plural, so it does not go
+              // through the naive pluraliser.
+              hint={`${count(history.movies, "film")}, ${history.series} series`}
+            />
+            <StatTile
+              label="Times you sat down"
+              value={history.sessions.toLocaleString()}
+              hint="An episode is a sitting. A binge is one title and many of these."
+            />
+            <StatTile
+              wide
+              label="Time watched"
+              value={
+                history.minutes_watched === null
+                  ? "—"
+                  : watchTime(history.minutes_watched)
+              }
+              hint={timeHint(
+                history.minutes_watched,
+                history.sessions_timed,
+                history.sessions,
+              )}
+            />
+          </div>
 
           <Panel title="When you watched">
             <MonthBars entries={history.by_month} unit="sitting" />
@@ -168,11 +170,16 @@ export default function StatsPage() {
               </p>
             )}
           </Panel>
-        </>
+        </section>
       )}
 
       {youtube && youtube.views > 0 && (
-        <section className="mt-12">
+        // Set apart by a rule and the ordinary section gap rather than by a
+        // bigger number than anything else here uses. The separation is the
+        // point -- YouTube is a different kind of thing, and never a
+        // recommendation -- but a magic 48px said so in a language nothing
+        // else on this page speaks.
+        <section className="mt-8 border-t border-line pt-8">
           <h2 className="text-lg font-medium">YouTube</h2>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted">
             Kept apart from the rest on purpose. This is a signal about what you
@@ -198,15 +205,17 @@ export default function StatsPage() {
             />
           </div>
 
-          {youtube.top_channels.length > 0 && (
-            <Panel title="Who you watch">
-              <BarList entries={youtube.top_channels} unit="view" />
-            </Panel>
-          )}
+          <div className="mt-4 space-y-4">
+            {youtube.top_channels.length > 0 && (
+              <Panel title="Who you watch">
+                <BarList entries={youtube.top_channels} unit="view" />
+              </Panel>
+            )}
 
-          <Panel title="When you watched it">
-            <MonthBars entries={youtube.by_month} unit="view" />
-          </Panel>
+            <Panel title="When you watched it">
+              <MonthBars entries={youtube.by_month} unit="view" />
+            </Panel>
+          </div>
         </section>
       )}
     </div>
@@ -223,7 +232,7 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="mt-4 border border-line bg-panel px-4 py-5 sm:px-5">
+    <section className="border border-line bg-panel px-4 py-5 sm:px-5">
       <div className="mb-4 flex items-baseline justify-between gap-3">
         <h2 className="text-base font-medium">{title}</h2>
         {note && <p className="text-xs text-dim">{note}</p>}
@@ -295,7 +304,7 @@ function Unresolved({
   nothingMatched: boolean;
 }) {
   return (
-    <div className="mt-8 border border-edge bg-panel px-4 py-4 sm:px-5">
+    <div className="mt-8 border border-edge bg-panel px-4 py-5 sm:px-5">
       <p className="text-[15px]">
         {nothingMatched
           ? `${count(sessions, "sitting")} imported, and none of them are matched to a title yet.`
@@ -318,7 +327,7 @@ function Unresolved({
 
 function Empty() {
   return (
-    <div className="mt-8 border border-line bg-panel px-5 py-10 text-center">
+    <div className="mt-8 border border-line bg-panel px-5 py-8 text-center">
       <p className="text-[15px]">Nothing imported yet.</p>
       <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-muted">
         Netflix and YouTube both let you download your own history. Drop the file
@@ -337,7 +346,7 @@ function Empty() {
 
 function Skeleton() {
   return (
-    <div aria-hidden className="mt-8">
+    <div aria-hidden className="mt-8 space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {Array.from({ length: 3 }, (_, index) => (
           <div
@@ -346,7 +355,7 @@ function Skeleton() {
           />
         ))}
       </div>
-      <div className="mt-4 h-[232px] animate-pulse border border-line bg-panel" />
+      <div className="h-[232px] animate-pulse border border-line bg-panel" />
     </div>
   );
 }
