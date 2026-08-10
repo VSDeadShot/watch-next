@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import BatchBar from "@/components/BatchBar";
 import { apiRequest, errorMessage } from "@/lib/api";
 import { count } from "@/lib/format";
 import type { ResolveSummary } from "@/lib/types";
@@ -135,7 +136,11 @@ export default function ResolveRunner({ onFinished }: { onFinished: () => void }
 
       {progress !== null && (
         <div className="mt-4">
-          <Bar done={progress.searched} left={progress.remaining} />
+          <BatchBar
+            done={progress.searched}
+            left={progress.remaining}
+            label="Titles looked up"
+          />
           <p className="mt-2 text-sm">
             {/* "titles" and "sittings" are named rather than left to context.
                 The two numbers disagree often -- one answer can count hundreds
@@ -196,33 +201,5 @@ export default function ResolveRunner({ onFinished }: { onFinished: () => void }
               : "Start matching"}
       </button>
     </section>
-  );
-}
-
-/**
- * How far along the run is.
- *
- * The denominator is what has been done plus what is left, so it grows as the
- * run discovers how much there was -- there is no way to know the total before
- * the first batch comes back, and inventing one would mean a bar that jumped.
- */
-function Bar({ done, left }: { done: number; left: number }) {
-  const total = done + left;
-  const share = total === 0 ? 1 : done / total;
-
-  return (
-    <div
-      className="h-1.5 w-full bg-raised"
-      role="progressbar"
-      aria-valuenow={done}
-      aria-valuemin={0}
-      aria-valuemax={total}
-      aria-label="Titles looked up"
-    >
-      <div
-        className="h-full bg-muted transition-[width] duration-500"
-        style={{ width: `${Math.round(share * 100)}%` }}
-      />
-    </div>
   );
 }

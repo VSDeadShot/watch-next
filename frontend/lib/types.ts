@@ -52,6 +52,26 @@ export interface ProviderRefresh {
   removed: number;
 }
 
+/**
+ * `POST /api/offers/refresh` -- what one batch of re-asking did.
+ *
+ * A different thing from {@link ProviderRefresh}, which the same page also
+ * runs: that one re-asks which services exist, this one re-asks where titles
+ * play on them.
+ */
+export interface AvailabilityRefresh {
+  refreshed: number;
+  /** Could not ask at all. The title keeps its old answer and is retried by the
+   *  next batch, which is why a batch of nothing but these means stopping. */
+  failed: number;
+  offers_stored: number;
+  /** Still stale after this batch. Zero means finished -- but only zero, and
+   *  only alongside something having been asked: a failed title stays counted
+   *  here, so a run watching this number alone would spin while the API is
+   *  down. */
+  remaining: number;
+}
+
 /** `GET`/`PUT /api/providers/mine` -- the services the user says they have. */
 export interface Subscriptions {
   country: string;

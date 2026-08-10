@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import AvailabilityRunner from "@/components/AvailabilityRunner";
 import ProviderGrid from "@/components/ProviderGrid";
 import { apiRequest, errorMessage } from "@/lib/api";
 import type { ProviderCatalogue, ProviderRefresh, Subscriptions } from "@/lib/types";
@@ -242,6 +243,13 @@ export default function SettingsPage() {
           </button>
         </div>
       )}
+
+      {/* Below the picker rather than on its own page, because it is the same
+          subject read the other way round: that section decides which services
+          count, this one decides whether what we believe about them is still
+          true. Both feed the one hard filter, and neither is worth a route in a
+          nav that was already at its measured width. */}
+      <AvailabilityRunner />
 
       {changed && (
         <SaveBar
