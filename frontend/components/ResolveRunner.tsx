@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { apiRequest, errorMessage } from "@/lib/api";
+import { count } from "@/lib/format";
 import type { ResolveSummary } from "@/lib/types";
 
 /**
@@ -29,11 +30,25 @@ const BATCH = 10;
 type Progress = {
   searched: number;
   matched: number;
+  // Sittings pointed at a title, which is a different thing from `matched` and
+  // the reason both are shown. `matched` counts questions the catalogue newly
+  // answered; this counts rows that answer applied to -- including rows linked
+  // from an answer already stored, which spends no request and so is never
+  // counted as a match. A re-imported library resolves entirely from those, and
+  // reporting only `matched` said "0" after a pass that had just linked
+  // hundreds of rows.
+  linked: number;
   needsDeciding: number;
   remaining: number;
 };
 
-const NOTHING: Progress = { searched: 0, matched: 0, needsDeciding: 0, remaining: 0 };
+const NOTHING: Progress = {
+  searched: 0,
+  matched: 0,
+  linked: 0,
+  needsDeciding: 0,
+  remaining: 0,
+};
 
 export default function ResolveRunner({ onFinished }: { onFinished: () => void }) {
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -60,6 +75,7 @@ export default function ResolveRunner({ onFinished }: { onFinished: () => void }
 
         total.searched += batch.searched;
         total.matched += batch.resolved;
+        total.linked += batch.linked_events;
         total.needsDeciding += batch.unresolved;
         total.remaining = batch.remaining;
         setProgress({ ...total });
@@ -121,7 +137,17 @@ export default function ResolveRunner({ onFinished }: { onFinished: () => void }
         <div className="mt-4">
           <Bar done={progress.searched} left={progress.remaining} />
           <p className="mt-2 text-sm">
-            {progress.matched.toLocaleString()} matched
+            {/* "titles" and "sittings" are named rather than left to context.
+                The two numbers disagree often -- one answer can count hundreds
+                of rows, and a pass that answers nothing new can still count
+                thousands -- and without the units that reads as a contradiction
+                rather than as two different things. */}
+            {count(progress.matched, "title")} matched
+            {progress.linked > 0 && (
+              <span className="text-muted">
+                , {count(progress.linked, "sitting")} now counted
+              </span>
+            )}
             {progress.needsDeciding > 0 && (
               <span className="text-muted">
                 , {progress.needsDeciding.toLocaleString()} need you
