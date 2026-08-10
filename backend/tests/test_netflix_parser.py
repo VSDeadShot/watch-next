@@ -381,3 +381,96 @@ class TestZipArchives:
     def test_reports_an_empty_archive_clearly(self):
         with pytest.raises(NetflixExportError):
             parse_netflix_export(zipped())
+
+
+class TestTwoDigitYears:
+    """The format a real Netflix export actually uses.
+
+    ``ViewingActivity.csv`` writes ``DD/MM/YY``, and a bare ``25`` read as a
+    year puts the whole history in the first century. That is not merely wrong
+    on the stats page: ``core/taste.py`` decays a title's weight by its age, so
+    a two-thousand-year-old history flattens every recency score to the floor
+    and the signal disappears without anything failing. Every fixture in this
+    file used four-digit years, which is exactly why nothing caught it.
+    """
+
+    @pytest.mark.parametrize(
+        ("date", "expected"),
+        [
+            # The shape that broke: a current export, read as year 25.
+            ("01/09/25", datetime(2025, 9, 1)),
+            ("09/08/26", datetime(2026, 8, 9)),
+            # The window Python's own `%y` uses, checked at both edges so a
+            # pivot moved by one is a failure rather than a rounding argument.
+            ("01/01/68", datetime(2068, 1, 1)),
+            ("01/01/69", datetime(1969, 1, 1)),
+            ("31/12/99", datetime(1999, 12, 31)),
+            ("01/01/00", datetime(2000, 1, 1)),
+        ],
+    )
+    def test_a_two_digit_year_is_expanded(self, date: str, expected: datetime):
+        data = f"Title,Date\nInception,{date}\n".encode()
+
+        result = parse_netflix_export(data, day_first=True)
+
+        assert result.events[0].watched_at.date() == expected.date()
+
+    @pytest.mark.parametrize(
+        ("date", "expected"),
+        [
+            ("25/12/2023", datetime(2023, 12, 25)),
+            ("01/02/2024", datetime(2024, 2, 1)),
+            # Guards the expansion against firing on anything but two digits.
+            ("01/02/0025", datetime(25, 2, 1)),
+        ],
+    )
+    def test_a_four_digit_year_is_left_alone(self, date: str, expected: datetime):
+        data = f"Title,Date\nInception,{date}\n".encode()
+
+        result = parse_netflix_export(data, day_first=True)
+
+        assert result.events[0].watched_at.date() == expected.date()
+
+    def test_the_expansion_is_recorded_as_an_assumption(self):
+        """A century read from two digits is inferred, and this project says so
+        rather than guessing quietly."""
+        data = b"Title,Date\nInception,01/09/25\n"
+
+        result = parse_netflix_export(data, day_first=True)
+
+        assert result.assumptions
+        assert any("year" in note.lower() for note in result.assumptions)
+
+    def test_four_digit_years_assume_nothing(self):
+        data = b"Title,Date\nInception,25/12/2023\n"
+
+        assert parse_netflix_export(data, day_first=True).assumptions == ()
+
+    def test_a_whole_export_of_two_digit_years_lands_in_this_century(self):
+        """The regression this class exists for, at the shape a real file has."""
+        data = b"Title,Date\nInception,01/09/25\nArrival,14/03/24\nDune,09/08/26\n"
+
+        result = parse_netflix_export(data, day_first=True)
+
+        years = [event.watched_at.year for event in result.events]
+        assert years == [2025, 2024, 2026]
+
+    def test_a_leap_day_survives_expansion(self):
+        """Only right if the century is known before the date is validated:
+        `datetime` is what refuses 29 February, and 2024 is a leap year while
+        the bare 24 it was written as is not a year at all."""
+        data = b"Title,Date\nInception,29/02/24\n"
+
+        result = parse_netflix_export(data, day_first=True)
+
+        assert result.events[0].watched_at.date() == datetime(2024, 2, 29).date()
+
+    def test_a_leap_day_in_a_non_leap_year_is_still_refused(self):
+        """The other half of the same ordering: expanding must not make an
+        impossible date possible."""
+        data = b"Title,Date\nInception,29/02/25\n"
+
+        result = parse_netflix_export(data, day_first=True)
+
+        assert result.events == ()
+        assert result.skipped

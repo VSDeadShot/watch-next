@@ -47,6 +47,11 @@ _HISTORY_FILENAMES = ("ViewingActivity.csv", "NetflixViewingHistory.csv")
 _FULL_TIMESTAMP = "%Y-%m-%d %H:%M:%S"
 _ISO_DATE = "%Y-%m-%d"
 
+# A year written with this many digits had its century left out. See
+# `_expand_two_digit_year` for the window, which is `%y`'s rather than our own.
+_TWO_DIGIT_YEAR_LENGTH = 2
+_TWO_DIGIT_YEAR_PIVOT = 69
+
 _SECONDS_PER_MINUTE = 60
 _SECONDS_PER_HOUR = 3600
 
@@ -227,9 +232,9 @@ def _parse_full(rows: list[dict[str, str]], *, min_watch_seconds: int) -> ParseR
 
 
 def _parse_simple(rows: list[dict[str, str]], *, day_first: bool | None) -> ParseResult:
-    resolved_day_first, assumptions = _resolve_date_order(
-        [_cell(row, "Date") for row in rows], day_first
-    )
+    dates = [_cell(row, "Date") for row in rows]
+    resolved_day_first, assumptions = _resolve_date_order(dates, day_first)
+    assumptions += _two_digit_year_assumption(dates)
 
     events: list[RawWatchEvent] = []
     skipped: Counter[SkipReason] = Counter()
@@ -328,7 +333,8 @@ def _parse_date(value: str, *, day_first: bool) -> datetime | None:
         return None
 
     try:
-        first, second, year = (int(part) for part in parts)
+        first, second = int(parts[0]), int(parts[1])
+        year = _expand_two_digit_year(parts[2])
     except ValueError:
         return None
 
@@ -337,6 +343,51 @@ def _parse_date(value: str, *, day_first: bool) -> datetime | None:
         return datetime(year, month, day, tzinfo=UTC)
     except ValueError:
         return None
+
+
+def _expand_two_digit_year(token: str) -> int:
+    """Read a year that a real export usually writes with two digits.
+
+    ``ViewingActivity.csv`` uses ``DD/MM/YY``, so taken literally a current
+    export lands in the first century. That is worse than a wrong axis label on
+    the stats page: :mod:`app.core.taste` weights a title by how recently it was
+    watched, and a two-thousand-year-old history decays every score to the same
+    floor -- so the recency signal vanishes silently, with nothing raised and
+    nothing to see but slightly worse recommendations.
+
+    The window is the one :func:`time.strptime`'s ``%y`` already uses: 69-99 are
+    the 1900s, 00-68 the 2000s. Borrowed rather than invented, because a second
+    convention in the same codebase is a thing to look up.
+
+    Decided by the token's *length*, not its value. ``0025`` and ``25`` both
+    parse to the integer 25, and only the written form says which century was
+    meant -- so a four-digit year is passed through however small it is.
+    """
+    year = int(token)
+    if len(token) != _TWO_DIGIT_YEAR_LENGTH:
+        return year
+    return year + 1900 if year >= _TWO_DIGIT_YEAR_PIVOT else year + 2000
+
+
+def _has_two_digit_year(value: str) -> bool:
+    parts = value.split("/")
+    return len(parts) == 3 and len(parts[2]) == _TWO_DIGIT_YEAR_LENGTH
+
+
+def _two_digit_year_assumption(values: list[str]) -> tuple[str, ...]:
+    """Say so when a century had to be inferred.
+
+    Nothing in the file settles whether ``25`` means 2025 or 1925, so this is a
+    guess in the same sense the day/month order is -- and this project's rule is
+    that a guess is reported rather than made quietly.
+    """
+    if not any(_has_two_digit_year(value) for value in values):
+        return ()
+
+    return (
+        "Dates such as 01/09/25 write the year with two digits. Read 00-68 as "
+        "2000-2068 and 69-99 as 1969-1999.",
+    )
 
 
 def _parse_duration(value: str) -> int | None:
