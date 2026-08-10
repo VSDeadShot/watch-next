@@ -18,6 +18,7 @@ from app.core.availability import Monetization
 from app.models import Offer, Title
 from app.services.justwatch_client import CatalogueEntry, OfferEntry
 from app.services.offers import (
+    DEFAULT_REFRESH_LIMIT,
     cached_offers,
     refresh_stale_offers,
     store_offers,
@@ -309,3 +310,82 @@ class TestRefreshingStaleTitles:
 
         session.refresh(title)
         assert title.offers_fetched_at is None
+
+
+class TestHowMuchIsLeft:
+    """`remaining` is what makes a refresh drivable in batches.
+
+    The pass paces itself at a request a second, so a catalogue of any size is
+    minutes inside one HTTP call. Splitting it needs a number that says whether
+    to ask again -- the same argument, and the same trap, as resolution.
+    """
+
+    def _stale(self, session: Session, node: str) -> Title:
+        row = Title(jw_node_id=node, object_type="MOVIE", title=node, offers_fetched_at=None)
+        session.add(row)
+        session.flush()
+        return row
+
+    def test_it_counts_what_a_limited_pass_left_behind(self, session: Session):
+        for node in ("tm1", "tm2", "tm3"):
+            self._stale(session, node)
+        lookup = FakeLookup({node: catalogue_entry(node) for node in ("tm1", "tm2", "tm3")})
+
+        summary = refresh_stale_offers(session, lookup, now=NOW, ttl=timedelta(days=7), limit=1)
+
+        assert summary.refreshed == 1
+        assert summary.remaining == 2
+
+    def test_it_reaches_zero_when_nothing_is_stale(self, session: Session):
+        self._stale(session, "tm1")
+        lookup = FakeLookup({"tm1": catalogue_entry("tm1")})
+
+        summary = refresh_stale_offers(session, lookup, now=NOW, ttl=timedelta(days=7))
+
+        assert summary.refreshed == 1
+        assert summary.remaining == 0
+
+    def test_a_failed_title_is_still_counted_as_remaining(self, session: Session):
+        """Nothing was learned about it, so it is still work to do. This is also
+        why `remaining` alone cannot end a run -- a caller that ignored `failed`
+        would loop here for as long as the API stayed down."""
+        from simplejustwatchapi.exceptions import JustWatchHttpError
+
+        self._stale(session, "tm1")
+        lookup = FakeLookup({"tm1": JustWatchHttpError("timed out")})
+
+        summary = refresh_stale_offers(session, lookup, now=NOW, ttl=timedelta(days=7))
+
+        assert summary.refreshed == 0
+        assert summary.failed == 1
+        assert summary.remaining == 1
+
+    def test_it_counts_past_the_size_of_one_batch(self, session: Session):
+        """`remaining` is what is left, not what the next pass would take.
+
+        Counting it with the batch limit would cap it at `DEFAULT_REFRESH_LIMIT`
+        and a caller would watch a progress bar sit still while work carried on.
+        Found by a mutation probe that survived every other test here, all of
+        which use catalogues far smaller than one batch.
+        """
+        nodes = [f"tm{n}" for n in range(DEFAULT_REFRESH_LIMIT + 5)]
+        for node in nodes:
+            self._stale(session, node)
+        lookup = FakeLookup({node: catalogue_entry(node) for node in nodes})
+
+        summary = refresh_stale_offers(session, lookup, now=NOW, ttl=timedelta(days=7), limit=1)
+
+        assert summary.refreshed == 1
+        assert summary.remaining == DEFAULT_REFRESH_LIMIT + 4
+
+    def test_a_second_batch_carries_on_from_the_first(self, session: Session):
+        for node in ("tm1", "tm2", "tm3"):
+            self._stale(session, node)
+        lookup = FakeLookup({node: catalogue_entry(node) for node in ("tm1", "tm2", "tm3")})
+
+        refresh_stale_offers(session, lookup, now=NOW, ttl=timedelta(days=7), limit=2)
+        summary = refresh_stale_offers(session, lookup, now=NOW, ttl=timedelta(days=7), limit=2)
+
+        assert summary.refreshed == 1
+        assert summary.remaining == 0
+        assert sorted(lookup.looked_up) == ["tm1", "tm2", "tm3"]

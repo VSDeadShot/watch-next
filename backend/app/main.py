@@ -9,7 +9,7 @@ silently from then on.
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import imports, providers, recommend, stats, titles, watchlist
+from app.api import imports, offers, providers, recommend, stats, titles, watchlist
 from app.api.security import require_api_key
 from app.config import get_settings
 
@@ -42,6 +42,7 @@ app.include_router(providers.router, dependencies=guarded)
 app.include_router(recommend.router, dependencies=guarded)
 app.include_router(watchlist.router, dependencies=guarded)
 app.include_router(stats.router, dependencies=guarded)
+app.include_router(offers.router, dependencies=guarded)
 
 
 @app.get("/health")

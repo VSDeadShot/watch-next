@@ -48,6 +48,16 @@ class RefreshSummary:
     refreshed: int = 0
     failed: int = 0
     offers_stored: int = 0
+    # How many titles are still stale once this pass finished. A refresh is
+    # driven in batches for the same reason resolution is -- a request a second
+    # against an unofficial API is minutes inside one HTTP call -- and without
+    # this a caller has no way to know whether to ask again.
+    #
+    # A failed title stays counted here, because nothing was learned about it.
+    # That means `remaining` alone cannot end a run: a caller must stop on
+    # `failed == refreshed + failed` too, or it will loop for as long as
+    # JustWatch is down. The same trap `/api/titles/resolve` documents.
+    remaining: int = 0
 
 
 def store_offers(
@@ -168,12 +178,17 @@ def titles_needing_refresh(
     *,
     now: datetime,
     ttl: timedelta = DEFAULT_TTL,
-    limit: int = DEFAULT_REFRESH_LIMIT,
+    limit: int | None = DEFAULT_REFRESH_LIMIT,
 ) -> list[Title]:
     """Catalogue rows whose availability is old enough to be worth re-asking.
 
     Oldest first, nulls first. A refresh is a budget of requests, and spending
     it on the answers most likely to have changed is the only sensible order.
+
+    ``limit=None`` means every stale row rather than a batch, which is how
+    :func:`refresh_stale_offers` counts what it has left to do. One definition
+    of "stale", used both to choose what to ask about and to count what remains,
+    so the two can never drift into disagreeing about what finished means.
     """
     # The first sort key is what puts never-asked titles at the front, and it
     # cannot be dropped even though it looks redundant: SQLite sorts NULLs first
@@ -184,7 +199,7 @@ def titles_needing_refresh(
         select(Title).order_by(Title.offers_fetched_at.is_not(None), Title.offers_fetched_at)
     )
     stale = [title for title in candidates if is_stale(title.offers_fetched_at, now=now, ttl=ttl)]
-    return stale[:limit]
+    return stale if limit is None else stale[:limit]
 
 
 def refresh_stale_offers(
@@ -229,4 +244,16 @@ def refresh_stale_offers(
         )
 
     session.commit()
-    return summary
+
+    # Recounted rather than worked out from the batch. A title whose request
+    # failed is still stale, and so is anything that crossed the TTL while the
+    # pass was running -- arithmetic on what we set out to do would miss both.
+    # It costs a second read of the catalogue, which is the same whole table
+    # this module already holds in memory and is worth fixing here, in the taste
+    # profile and in the stats together rather than a third of it here.
+    return RefreshSummary(
+        refreshed=summary.refreshed,
+        failed=summary.failed,
+        offers_stored=summary.offers_stored,
+        remaining=len(titles_needing_refresh(session, now=when, ttl=ttl, limit=None)),
+    )

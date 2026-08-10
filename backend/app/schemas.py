@@ -60,6 +60,28 @@ class ResolveSummaryResponse(BaseModel):
     remaining: int = 0
 
 
+class RefreshSummaryResponse(BaseModel):
+    """What one availability refresh did.
+
+    Availability is the hard filter this product rests on -- a title the user
+    cannot press play on is not a candidate at any score -- so an offer cache
+    nobody refreshes decays into confidently recommending things that left the
+    service months ago.
+    """
+
+    refreshed: int
+    failed: int
+    offers_stored: int
+    # How many titles are still stale. Driven in batches like resolution, and
+    # for the same reason: a request a second against an unofficial API is
+    # minutes inside one HTTP call.
+    #
+    # A failed title stays counted here, so `remaining` alone cannot end a run.
+    # A caller must stop on every request failing too, or it will loop for as
+    # long as JustWatch is down.
+    remaining: int = 0
+
+
 class TitleCandidate(BaseModel):
     """One option the matcher weighed, as a button in the fixer.
 

@@ -148,6 +148,7 @@ PUT    /api/titles/resolutions/{id}   decide one by hand
 GET    /api/providers                 the catalogue for the country
 POST   /api/providers/refresh
 GET    /api/providers/mine            PUT replaces the whole set in one request
+POST   /api/offers/refresh            re-ask about titles whose availability went stale; ?limit=
 POST   /api/recommend                 the product
 GET    /api/watchlist                 POST adds; PATCH ticks off or edits a note; DELETE removes
 GET    /api/stats                     what the history adds up to, and how much of it is unmatched
