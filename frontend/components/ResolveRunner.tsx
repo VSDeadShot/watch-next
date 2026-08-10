@@ -150,7 +150,11 @@ export default function ResolveRunner({ onFinished }: { onFinished: () => void }
             )}
             {progress.needsDeciding > 0 && (
               <span className="text-muted">
-                , {progress.needsDeciding.toLocaleString()} need you
+                {/* The verb agrees rather than the noun: "1 title needs you"
+                    would be a third "titles" on one line, and the count is
+                    already named by the clause it follows. */}
+                , {progress.needsDeciding.toLocaleString()}{" "}
+                {progress.needsDeciding === 1 ? "needs" : "need"} you
               </span>
             )}
             {progress.remaining > 0 ? (
