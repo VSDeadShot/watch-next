@@ -16,6 +16,19 @@ _DRIVERLESS_POSTGRES = ("postgresql://", "postgres://")
 _POSTGRES_DRIVER = "postgresql+psycopg://"
 
 
+def is_sqlite_url(url: str) -> bool:
+    """Whether this URL names a local SQLite file.
+
+    One definition with three readers, because they must not be able to
+    disagree. ``db.py`` uses it to decide on the cross-thread check, and
+    ``api/security.py`` uses it as the only available evidence of whether this
+    process is a laptop or a deployment -- and a rule about connection pooling
+    silently drifting away from a rule about authentication is exactly the kind
+    of divergence nothing would notice.
+    """
+    return url.startswith("sqlite")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -39,6 +52,17 @@ class Settings(BaseSettings):
     # deployment and the API stops answering strangers. See app/api/security.py
     # for why CORS is not a substitute for this.
     api_secret: str = ""
+
+    # "Yes, I know this API answers anyone, and I mean it." The escape hatch for
+    # the one honest case the rule in api/security.py reads the wrong way round:
+    # a Postgres running on the same laptop. Named for the decision rather than
+    # for an environment, so that setting it by accident is hard and reading it
+    # in a dashboard leaves nobody in any doubt about what it does.
+    allow_unauthenticated: bool = False
+
+    @property
+    def is_sqlite(self) -> bool:
+        return is_sqlite_url(self.database_url)
 
     @field_validator("database_url")
     @classmethod

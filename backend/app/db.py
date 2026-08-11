@@ -11,7 +11,7 @@ from app.config import get_settings
 
 settings = get_settings()
 
-_is_sqlite = settings.database_url.startswith("sqlite")
+_is_sqlite = settings.is_sqlite
 
 # SQLite refuses connections across threads by default, and FastAPI serves
 # requests from a thread pool. Harmless on Postgres, which ignores it.
