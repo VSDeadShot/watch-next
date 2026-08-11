@@ -3,6 +3,13 @@ import type { NextRequest } from "next/server";
 /**
  * Everything the browser sends to the backend goes through here.
  *
+ * **Not `proxy.ts` at the project root**, despite this file being what the repo
+ * calls "the proxy" everywhere else. That one is Next's name for what used to
+ * be middleware, and it gates human access to the whole site. This one forwards
+ * API calls and holds the backend's key. Neither can do the other's job: this
+ * handler authenticates *to* the backend and nothing *to* it, which is exactly
+ * why the root file had to exist.
+ *
  * The backend has one user and no login, so deployed it needs a secret in
  * front of it -- and this app renders in the browser, which means any value the
  * frontend knows is in the bundle and public. `NEXT_PUBLIC_` says so in its own
