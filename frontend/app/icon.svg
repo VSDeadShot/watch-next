@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="watch next">
+  <!-- The product name written in transport symbols: play, then the bar that
+       means next. A bare triangle would say "watch" and stop, and is also the
+       single most drawn favicon there is.
+
+       The tile carries its own ink ground rather than sitting transparent. A
+       white-only mark disappears against a light tab strip; with the ground, a
+       light strip gets a dark square and a dark strip gets the mark alone, and
+       both of those are right.
+
+       Two shapes, one gap, no interior detail, because all of it has to survive
+       being drawn sixteen pixels wide. Every coordinate is even for the same
+       reason: at 16px one unit of this grid is half a device pixel, so an odd
+       edge lands mid-pixel and antialiases into a smear. On even ones the bar
+       renders as two solid pixels and the gap as two empty ones. That was tuned
+       against a real 16px raster rather than picked here and hoped for; the
+       first attempt put a 3-unit bar at x=22 and it came out one and a half
+       pixels wide, which is the smear this avoids.
+
+       Note for editors: an XML comment may not contain a double hyphen, so the
+       dashes this repo's prose usually reaches for are spelled out here. A
+       stray one does not warn, it makes the file unparseable and the icon
+       silently becomes a broken image. -->
+  <rect width="32" height="32" rx="7" fill="#0a0a0a" />
+  <path d="M6 8 18 16 6 24Z" fill="#ffffff" />
+  <rect x="22" y="8" width="4" height="16" fill="#ffffff" />
+</svg>
