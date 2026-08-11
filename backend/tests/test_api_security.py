@@ -18,15 +18,57 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.api.security import GateStatus, gate_status
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.main import app
+from app.main import app, create_app
 
 SECRET = "a-secret-the-browser-never-sees"
+
+#: Any non-SQLite URL reads as a deployment. Never connected to -- create_engine
+#: does not dial out, and these tests only ask what the routing table looks like.
+DEPLOYED_URL = "postgresql+psycopg://user:pw@host/db"
+
+#: The one route that must answer a stranger. Render polls it to decide whether
+#: the service is up, and a healthy deployment behind a 401 looks permanently
+#: broken. Everything else is a bug if it is on this list.
+PUBLIC_BY_DESIGN = {"/health"}
+
+
+def routing_table(application: FastAPI) -> list[tuple[str, tuple[str, ...]]]:
+    """Every route the app will actually match, as ``(path, methods)``.
+
+    Not ``app.openapi()``. The schema is a *description* of the app, and the
+    routes that go missing from a description are precisely the ones nothing is
+    describing -- FastAPI's own ``/docs``, ``/redoc``, ``/openapi.json`` and the
+    OAuth redirect appear in none of it. Walking the schema to check that
+    everything is guarded therefore cannot, even in principle, find the category
+    of route that was unguarded.
+
+    Included routers are not flattened into ``app.routes`` in FastAPI 0.140, so
+    this recurses through them. That is version-sensitive by nature, which is
+    why ``TestTheRouteEnumeratorItself`` exists: an enumerator that quietly
+    returned nothing would make every test below pass while checking nothing.
+    """
+    found: list[tuple[str, tuple[str, ...]]] = []
+
+    def walk(routes: object, prefix: str) -> None:
+        for route in routes:  # type: ignore[attr-defined]
+            path = getattr(route, "path", None)
+            if path is not None:
+                methods = tuple(sorted(getattr(route, "methods", ()) or ()))
+                found.append((prefix + path, methods))
+            elif (inner := getattr(route, "original_router", None)) is not None:
+                context = getattr(route, "include_context", None)
+                walk(inner.routes, prefix + (getattr(context, "prefix", "") or ""))
+
+    walk(application.routes, "")
+    return sorted(set(found))
+
 
 #: The backend project root, so a subprocess can import ``app`` from anywhere.
 BACKEND = Path(__file__).resolve().parents[1]
@@ -55,6 +97,24 @@ def open_client(session: Session) -> Iterator[TestClient]:
 @pytest.fixture
 def guarded(session: Session) -> Iterator[TestClient]:
     yield from build(session, api_secret=SECRET)
+
+
+@pytest.fixture
+def deployed(session: Session) -> Iterator[TestClient]:
+    """An app built the way a deployment builds it, rather than the way the
+    suite does: a secret set and a Postgres URL, so the reference docs are gone
+    and the gate is live. The default app is the local shape, and asking it
+    whether documentation is exposed would be asking about a configuration that
+    is never deployed."""
+    application = create_app(
+        Settings(database_url=DEPLOYED_URL, api_secret=SECRET, jw_country="IN", jw_language="en")
+    )
+    application.dependency_overrides[get_db] = lambda: session
+    application.dependency_overrides[get_settings] = lambda: Settings(
+        jw_country="IN", jw_language="en", api_secret=SECRET
+    )
+    with TestClient(application) as client:
+        yield client
 
 
 class TestWithNoSecretConfigured:
@@ -357,20 +417,82 @@ class TestTheProcessActuallyRefusesToStart:
         assert result.stderr.strip() == ""
 
 
-class TestEveryRouterIsBehindIt:
-    """A gate applied router by router is a gate somebody can forget to apply to
-    the next one. This fails when a router is added without it."""
+class TestTheRouteEnumeratorItself:
+    """The test below is only as good as its list of routes, so the list is
+    checked first.
 
-    def test_no_api_route_answers_without_a_key(self, guarded: TestClient):
+    An enumerator that silently returned nothing would make the guard test pass
+    perfectly while proving nothing at all -- the worst failure available to a
+    security test, because it looks like success. It walks FastAPI internals to
+    flatten included routers, so it is exactly the kind of thing a dependency
+    bump breaks quietly.
+    """
+
+    def test_it_finds_more_than_the_schema_documents(self):
+        # The whole point. /docs, /redoc and /openapi.json are real routes that
+        # appear nowhere in app.openapi(), which is why walking the schema could
+        # never have found them.
+        assert len(routing_table(app)) > len(app.openapi()["paths"])
+
+    def test_every_documented_path_is_in_it(self):
+        # If FastAPI changes how included routers are stored, this is what
+        # notices, rather than the guard test quietly walking an empty list.
+        found = {path for path, _ in routing_table(app)}
+        assert set(app.openapi()["paths"]) <= found
+
+    def test_it_finds_the_routes_the_schema_hides(self):
+        found = {path for path, _ in routing_table(app)}
+        assert {"/docs", "/redoc", "/openapi.json"} <= found
+
+
+class TestEverythingIsBehindIt:
+    """A gate applied router by router is a gate somebody can forget to apply to
+    the next one -- and FastAPI mounts four routes of its own that no router
+    owns. This walks the real routing table and fails on anything that answers.
+
+    Built the way a deployment builds it rather than the way the test suite
+    does. In the local shape the reference docs are meant to be reachable, so
+    asking the default app this question would be asking it about a
+    configuration nobody deploys.
+    """
+
+    def test_no_route_answers_without_a_key(self, deployed: TestClient):
         unguarded = []
-        for path, operations in app.openapi()["paths"].items():
-            if not path.startswith("/api/"):
+        for path, methods in routing_table(deployed.app):
+            if path in PUBLIC_BY_DESIGN:
                 continue
-            for method in operations:
+            for method in methods:
                 # A concrete id, so a path parameter does not 422 before the
                 # gate has had a chance to refuse.
                 url = path.replace("{resolution_id}", "1").replace("{title_id}", "1")
-                response = guarded.request(method.upper(), url)
+                response = deployed.request(method, url)
                 if response.status_code != 401:
-                    unguarded.append(f"{method.upper()} {path} -> {response.status_code}")
+                    unguarded.append(f"{method} {path} -> {response.status_code}")
         assert unguarded == []
+
+    def test_health_is_the_only_thing_public_by_design(self):
+        assert {"/health"} == PUBLIC_BY_DESIGN
+
+
+class TestTheReferenceDocs:
+    """They describe every endpoint in the app, and they sit outside every
+    router, so the dependency guarding the rest cannot reach them. On the
+    deployed backend they answered 200 while `/api/stats` answered 401."""
+
+    @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"])
+    def test_they_do_not_exist_where_the_gate_is_enforced(self, deployed: TestClient, path: str):
+        # 404 rather than 401: the route is gone, not refused. There is nothing
+        # to brute-force and nothing to confirm the guess against.
+        assert deployed.get(path).status_code == 404
+
+    @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+    def test_they_are_there_when_the_api_is_open_anyway(self, open_client: TestClient, path: str):
+        # Where anyone can call every endpoint already, hiding the description
+        # of them protects nothing and costs the one place they are useful.
+        assert open_client.get(path).status_code == 200
+
+    def test_the_schema_is_still_generated_without_a_route_to_serve_it(self):
+        # openapi_url=None removes the route, not the method. The suite reads
+        # the schema directly, and so does anything generating a client.
+        built = create_app(Settings(database_url=DEPLOYED_URL, api_secret=SECRET))
+        assert built.openapi()["paths"]
