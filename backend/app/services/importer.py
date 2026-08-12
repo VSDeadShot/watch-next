@@ -76,6 +76,7 @@ def import_netflix_export(
     *,
     filename: str | None = None,
     min_watch_seconds: int = 60,
+    max_history_bytes: int = 16 * 1024 * 1024,
     user_id: str = DEFAULT_USER_ID,
 ) -> ImportSummary:
     """Read an uploaded export and store the rows not already held.
@@ -84,7 +85,9 @@ def import_netflix_export(
         NetflixExportError: if the upload cannot be read. Parsing happens before
             anything is written, so a rejected upload leaves no trace.
     """
-    parsed = parse_netflix_export(data, min_watch_seconds=min_watch_seconds)
+    parsed = parse_netflix_export(
+        data, min_watch_seconds=min_watch_seconds, max_history_bytes=max_history_bytes
+    )
 
     fingerprints = fingerprint_events(parsed.events, source=SOURCE)
     already_stored = _existing_fingerprints(session, user_id, fingerprints)

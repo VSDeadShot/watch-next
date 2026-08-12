@@ -11,6 +11,8 @@ exactly the friction this project exists to remove.
 """
 
 import io
+import struct
+import tracemalloc
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +22,7 @@ import pytest
 from app.core.netflix_parser import (
     ExportFormat,
     NetflixExportError,
+    NetflixTooLargeError,
     SkipReason,
     parse_netflix_export,
 )
@@ -474,3 +477,141 @@ class TestTwoDigitYears:
 
         assert result.events == ()
         assert result.skipped
+
+
+class TestAnExportTooLargeToRead:
+    """A zip bomb is a few hundred kilobytes that unpacks into hundreds of
+    megabytes, and this parser used to read whatever it was handed.
+
+    The interesting part is *how* the limit is enforced. The obvious guard is
+    the uncompressed size in the archive's central directory, which is free to
+    read without decompressing anything -- but it is a number the attacker
+    wrote, and `zipfile` does not hold a file to it. The tests below pin down
+    that the refusal survives a header rewritten to say whatever it likes.
+    """
+
+    CAP = 64 * 1024
+
+    # Enough to be unmistakable if it were ever read in full, small enough that
+    # building it costs the suite nothing.
+    PAYLOAD = 8 * 1024 * 1024
+
+    def bomb(self, *, declares: int | None = None) -> bytes:
+        """A compressible payload far past the cap, optionally lying about it.
+
+        Deflated rather than stored, which is the whole trick: the archive that
+        comes back is a few kilobytes, so nothing upstream of the parser -- not
+        an upload limit, not a proxy -- has any reason to stop it.
+        """
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("CONTENT_INTERACTION/ViewingActivity.csv", b"\0" * self.PAYLOAD)
+        raw = bytearray(buffer.getvalue())
+        if declares is not None:
+            # Central-directory header: PK\x01\x02, uncompressed size at +24.
+            at = raw.rfind(b"PK\x01\x02")
+            struct.pack_into("<I", raw, at + 24, declares)
+        return bytes(raw)
+
+    def peak_heap(self, archive: bytes) -> int:
+        """Peak heap while refusing `archive`, with nothing else in the window.
+
+        The archive is built by the caller and passed in: constructing it costs
+        eight megabytes of zeros, and measuring that too would have hidden the
+        very allocation these tests exist to catch.
+        """
+        tracemalloc.start()
+        try:
+            with pytest.raises(NetflixExportError):
+                parse_netflix_export(archive, max_history_bytes=self.CAP)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        return peak
+
+    def test_a_zip_that_unpacks_past_the_cap_is_refused(self):
+        with pytest.raises(NetflixTooLargeError):
+            parse_netflix_export(self.bomb(), max_history_bytes=self.CAP)
+
+    def test_refusing_it_does_not_decompress_the_whole_thing(self):
+        """The assertion this class exists for. Rejecting the archive *after*
+        unpacking it costs exactly what the attack was after -- the answer is
+        still 400, and the instance is still out of memory."""
+        assert self.peak_heap(self.bomb()) < self.PAYLOAD // 8
+
+    def test_a_rewritten_header_cannot_talk_its_way_past_the_cap(self):
+        """The reason the guard is a bounded read and not a look at the declared
+        size. This archive says it holds a kilobyte and holds eight megabytes."""
+        with pytest.raises(NetflixExportError):
+            parse_netflix_export(self.bomb(declares=1000), max_history_bytes=self.CAP)
+
+    def test_a_rewritten_header_does_not_decompress_the_whole_thing_either(self):
+        assert self.peak_heap(self.bomb(declares=1000)) < self.PAYLOAD // 8
+
+    def test_a_bare_csv_over_the_cap_is_refused(self):
+        """Nothing is decompressed on this path, but the cap is what the parse
+        after it costs, and that does not care how the bytes arrived."""
+        data = b"Title,Date\n" + b"Inception,2024-01-01\n" * self.CAP
+
+        with pytest.raises(NetflixTooLargeError):
+            parse_netflix_export(data, max_history_bytes=self.CAP)
+
+    def test_the_message_names_the_limit(self):
+        with pytest.raises(NetflixTooLargeError) as excinfo:
+            parse_netflix_export(b"x" * (self.CAP + 1), max_history_bytes=self.CAP)
+
+        assert str(self.CAP) in str(excinfo.value).replace(",", "")
+
+    def test_an_export_of_exactly_the_cap_is_still_read(self):
+        """The boundary, from the side that must not be refused. An off-by-one
+        here rejects a legitimate file and reads as data loss to the user."""
+        head, tail = b"Title,Date\n", b",2024-01-01\n"
+        data = head + b"x" * (self.CAP - len(head) - len(tail)) + tail
+        assert len(data) == self.CAP
+
+        result = parse_netflix_export(data, max_history_bytes=self.CAP)
+
+        assert len(result.events) == 1
+
+    def test_a_zipped_export_of_exactly_the_cap_is_still_read(self):
+        head, tail = b"Title,Date\n", b",2024-01-01\n"
+        csv = head + b"x" * (self.CAP - len(head) - len(tail)) + tail
+
+        result = parse_netflix_export(
+            zipped({"NetflixViewingHistory.csv": csv}), max_history_bytes=self.CAP
+        )
+
+        assert len(result.events) == 1
+
+    def test_a_corrupt_archive_within_the_cap_is_still_caught(self):
+        """Reading a bounded number of bytes must not cost the integrity check.
+        A file that ends inside the cap still reaches EOF, which is where
+        `zipfile` verifies the CRC -- so ordinary corruption is still refused
+        rather than parsed into a half-empty history."""
+        csv = b"Title,Date\nInception,2024-01-01\n"
+        raw = bytearray(zipped({"NetflixViewingHistory.csv": csv}))
+        raw[raw.rfind(b"PK\x01\x02") + 16] ^= 0xFF  # flip a bit in the stored CRC
+
+        with pytest.raises(NetflixExportError):
+            parse_netflix_export(bytes(raw), max_history_bytes=self.CAP)
+
+    def test_a_readable_second_export_does_not_rescue_an_oversized_first(self):
+        """Found the file it wanted, refused it, and stopped. Reading the
+        thinner export instead would hand back a history missing everything the
+        full one knew, without saying so -- which is the guess this project
+        does not make."""
+        archive = zipped(
+            {
+                "CONTENT_INTERACTION/ViewingActivity.csv": b"\0" * (self.CAP * 2),
+                "NetflixViewingHistory.csv": b"Title,Date\nInception,2024-01-01\n",
+            }
+        )
+
+        with pytest.raises(NetflixTooLargeError):
+            parse_netflix_export(archive, max_history_bytes=self.CAP)
+
+    def test_it_is_a_kind_of_export_error(self):
+        """So a caller that only knows the base class still answers sensibly.
+        The endpoint separates the two to say 413 rather than 400, but anything
+        that forgets to degrades to the ordinary refusal, not to a 500."""
+        assert issubclass(NetflixTooLargeError, NetflixExportError)

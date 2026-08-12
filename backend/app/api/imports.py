@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from app.api.deps import SessionDep, SettingsDep
-from app.core.netflix_parser import NetflixExportError
+from app.core.netflix_parser import NetflixExportError, NetflixTooLargeError
 from app.core.youtube_parser import YouTubeExportError
 from app.schemas import ImportSummaryResponse
 from app.services.importer import (
@@ -31,6 +31,24 @@ async def import_netflix(
     call repeatedly with the same file: rows already stored are counted as
     duplicates rather than inserted again.
     """
+    # Checked before the read, not before the request. FastAPI has already
+    # parsed the body by the time any endpoint or dependency runs, and
+    # Starlette's `max_part_size` only applies to non-file parts -- so this
+    # bounds what the upload costs in memory, CPU and database work, but not
+    # the bytes arriving. Refusing at the door would need middleware reading
+    # `Content-Length`, and past the API key there is nobody to refuse.
+    if file.size is not None and file.size > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=(
+                f"this upload is {file.size:,} bytes, over the "
+                f"{settings.max_upload_bytes:,} this endpoint accepts. The "
+                "Netflix personal-data zip is a few megabytes; if you meant to "
+                "send something else, /api/imports/youtube takes the Takeout "
+                "watch history."
+            ),
+        )
+
     data = await file.read()
 
     try:
@@ -39,7 +57,17 @@ async def import_netflix(
             data,
             filename=file.filename,
             min_watch_seconds=settings.min_watch_seconds,
+            max_history_bytes=settings.max_history_bytes,
         )
+    # Before the base class it derives from: a compressed archive can be small
+    # enough to accept and still unpack to more than the parser will read, and
+    # answering that with 400 would tell the user to send a different file when
+    # the file was right and only the size was wrong.
+    except NetflixTooLargeError as error:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(error)
+        ) from error
     except NetflixExportError as error:
         session.rollback()
         # The parser's message names what it found and where the right file

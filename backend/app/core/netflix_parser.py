@@ -66,6 +66,17 @@ class NetflixExportError(ValueError):
     """The upload is not a Netflix viewing-history export we can read."""
 
 
+class NetflixTooLargeError(NetflixExportError):
+    """The export is larger than this importer is willing to read.
+
+    A subclass rather than a sibling, so that a caller which handles only the
+    base class still answers with an ordinary refusal instead of a 500. The
+    endpoint tells the two apart to say 413 rather than 400, because "send less"
+    and "send something else" are not the same advice -- but nothing depends on
+    it remembering to.
+    """
+
+
 class ExportFormat(StrEnum):
     FULL = "full"
     SIMPLE = "simple"
@@ -110,6 +121,7 @@ def parse_netflix_export(
     *,
     min_watch_seconds: int = 60,
     day_first: bool | None = None,
+    max_history_bytes: int = 16 * 1024 * 1024,
 ) -> ParseResult:
     """Parse an uploaded Netflix export, zip or CSV.
 
@@ -121,13 +133,18 @@ def parse_netflix_export(
             the only one carrying durations.
         day_first: Force the reading of ambiguous ``dd/mm`` vs ``mm/dd`` dates in
             the simple export. ``None`` infers it from the file.
+        max_history_bytes: The largest history CSV this will read, before or
+            after decompression. Parsing costs roughly twelve times the file's
+            size in peak memory, so this is the number that decides what one
+            upload can make the process spend.
 
     Raises:
         NetflixExportError: if the upload is unreadable or is not a history
             export. The message names what was found, so the user can tell which
             file they picked by mistake.
+        NetflixTooLargeError: if the history is past ``max_history_bytes``.
     """
-    text = _decode(_locate_csv(data))
+    text = _decode(_locate_csv(data, max_bytes=max_history_bytes))
     reader = csv.DictReader(io.StringIO(text))
     export_format = _detect_format(reader.fieldnames)
     rows = list(reader)
@@ -137,9 +154,29 @@ def parse_netflix_export(
     return _parse_simple(rows, day_first=day_first)
 
 
-def _locate_csv(data: bytes) -> bytes:
-    """Return the history CSV, reaching inside a zip when given one."""
+def _locate_csv(data: bytes, *, max_bytes: int) -> bytes:
+    """Return the history CSV, reaching inside a zip when given one.
+
+    The read is bounded, and deliberately **not** bounded by the size the
+    archive declares. ``ZipInfo.file_size`` sits in the central directory and
+    costs nothing to read, which makes it the obvious guard -- but it is a
+    number the uploader wrote, and :mod:`zipfile` does not hold a file to it.
+    ``read()`` with no argument loops until the *compressed* stream ends, so an
+    archive whose header has been rewritten to claim a kilobyte still delivers
+    its whole payload. Measured: 209 KB on the wire, 210 MB out, and a peak of
+    447 MB before the CRC check finally noticed. A guard that can be edited out
+    of the file it is guarding is not one.
+
+    Reading ``max_bytes + 1`` needs no trust in the header at all. Decompression
+    stops there, the extra byte is what separates "exactly at the limit" from
+    "past it", and a file that ends within the limit still reaches EOF -- which
+    is where the CRC is verified, so ordinary corruption is caught as before.
+    """
     if not data.startswith(_ZIP_MAGIC):
+        # Nothing is decompressed on this path, but the limit is about what
+        # parsing the bytes will cost, and that does not care how they arrived.
+        if len(data) > max_bytes:
+            raise _too_large(max_bytes)
         return data
 
     try:
@@ -148,7 +185,17 @@ def _locate_csv(data: bytes) -> bytes:
             for wanted in _HISTORY_FILENAMES:
                 for name in names:
                     if name.rsplit("/", 1)[-1].casefold() == wanted.casefold():
-                        return archive.read(name)
+                        with archive.open(name) as member:
+                            payload = member.read(max_bytes + 1)
+                        if len(payload) > max_bytes:
+                            # Refused rather than fallen through to the next
+                            # candidate name. A too-large ViewingActivity.csv
+                            # sitting beside a readable NetflixViewingHistory.csv
+                            # would otherwise import the thinner file in silence,
+                            # and the user would be shown a history missing
+                            # everything the wider export knew.
+                            raise _too_large(max_bytes, inside=name)
+                        return payload
     except zipfile.BadZipFile as error:
         raise NetflixExportError(f"the archive could not be read: {error}") from error
 
@@ -156,6 +203,22 @@ def _locate_csv(data: bytes) -> bytes:
         "no viewing history found in the archive. Expected a file named "
         f"{' or '.join(_HISTORY_FILENAMES)} -- in the full Netflix download it "
         "sits at CONTENT_INTERACTION/ViewingActivity.csv."
+    )
+
+
+def _too_large(max_bytes: int, *, inside: str | None = None) -> NetflixTooLargeError:
+    """Refuse, saying what was too big and roughly how far off it is.
+
+    The size is never quoted, because past the limit it was never measured --
+    the read stopped one byte in. Naming the limit is the actionable half
+    anyway: it is the number to raise if a genuine history is somehow this
+    large.
+    """
+    what = f"'{inside}' inside the archive" if inside else "this file"
+    return NetflixTooLargeError(
+        f"{what} is larger than the {max_bytes:,} bytes this importer will read. "
+        "A real Netflix viewing history is a few megabytes at most, so this is "
+        "probably not one -- if it genuinely is, raise MAX_HISTORY_BYTES."
     )
 
 

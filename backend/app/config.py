@@ -44,6 +44,22 @@ class Settings(BaseSettings):
     # Below this, a view is an accidental start rather than something watched.
     min_watch_seconds: int = 60
 
+    # Two limits rather than one, because they bound different things. The full
+    # Netflix download is a zip of about a dozen folders, nearly all of them
+    # nothing to do with viewing history, so the archive is legitimately much
+    # larger than the file wanted out of it -- one number would either refuse a
+    # real export or let the parser read anything.
+    #
+    # The first is what the endpoint will accept at all. The second is what gets
+    # decompressed and parsed, and it is the one that decides what a request can
+    # cost: parsing measures at about twelve times the CSV's size in peak heap,
+    # so 16 MB is roughly 200 MB of RAM on a 512 MB instance. It still admits
+    # some 130,000 rows, which is an order of magnitude more history than an
+    # account accumulates. See core/netflix_parser._locate_csv for why the
+    # second limit cannot be enforced from what the archive says about itself.
+    max_upload_bytes: int = 32 * 1024 * 1024
+    max_history_bytes: int = 16 * 1024 * 1024
+
     frontend_origin: str = "http://localhost:3000"
 
     # The shared secret the Next.js proxy presents, and the browser never sees.
