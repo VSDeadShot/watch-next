@@ -10,7 +10,7 @@ been filled in at least once.
 from fastapi import APIRouter, HTTPException, status
 from simplejustwatchapi.exceptions import JustWatchError
 
-from app.api.deps import CatalogueDep, SessionDep, SettingsDep
+from app.api.deps import CatalogueDep, SessionDep, SettingsDep, UserDep
 from app.schemas import (
     ProviderCatalogueResponse,
     ProviderRefreshResponse,
@@ -80,17 +80,17 @@ def refresh(session: SessionDep, catalogue: CatalogueDep) -> ProviderRefreshResp
 
 
 @router.get("/mine", response_model=SubscriptionsResponse)
-def mine(session: SessionDep, settings: SettingsDep) -> SubscriptionsResponse:
+def mine(session: SessionDep, settings: SettingsDep, user: UserDep) -> SubscriptionsResponse:
     """The services the user says they have."""
     return SubscriptionsResponse(
         country=settings.jw_country,
-        short_names=subscriptions(session, country=settings.jw_country),
+        short_names=subscriptions(session, country=settings.jw_country, user_id=user),
     )
 
 
 @router.put("/mine", response_model=SubscriptionsResponse)
 def set_mine(
-    body: SubscriptionsRequest, session: SessionDep, settings: SettingsDep
+    body: SubscriptionsRequest, session: SessionDep, settings: SettingsDep, user: UserDep
 ) -> SubscriptionsResponse:
     """Replace the whole set. Sending an empty list cancels everything.
 
@@ -99,7 +99,9 @@ def set_mine(
     stored settings cannot drift out of step with what the page is showing.
     """
     try:
-        stored = set_subscriptions(session, body.short_names, country=settings.jw_country)
+        stored = set_subscriptions(
+            session, body.short_names, country=settings.jw_country, user_id=user
+        )
     except UnknownProvider as error:
         # The client's fault, not an outage: it named a service the catalogue for
         # this country does not list. 400 rather than 404 -- the route exists and

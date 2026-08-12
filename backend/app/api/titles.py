@@ -9,7 +9,7 @@ a file.
 from fastapi import APIRouter, HTTPException, Query, status
 from simplejustwatchapi.exceptions import JustWatchApiError, JustWatchError
 
-from app.api.deps import CatalogueDep, SessionDep
+from app.api.deps import CatalogueDep, SessionDep, UserDep
 from app.core.title_parser import TitleKind
 from app.schemas import (
     ManualResolutionRequest,
@@ -43,6 +43,7 @@ MINIMUM_SEARCH_LENGTH = 2
 def resolve(
     session: SessionDep,
     catalogue: CatalogueDep,
+    user: UserDep,
     retry_unresolved: bool = False,
     limit: int | None = Query(None, ge=1, le=MAX_REQUESTS_PER_PASS),
 ) -> ResolveSummaryResponse:
@@ -65,7 +66,7 @@ def resolve(
     """
     try:
         summary = resolve_library(
-            session, catalogue, retry_unresolved=retry_unresolved, limit=limit
+            session, catalogue, retry_unresolved=retry_unresolved, limit=limit, user_id=user
         )
     except PassAlreadyRunning as error:
         # 409 rather than 429: nothing here is rate limiting the caller, and
@@ -85,6 +86,7 @@ def resolve(
 @router.get("/unresolved", response_model=UnresolvedPageResponse)
 def unresolved(
     session: SessionDep,
+    user: UserDep,
     limit: int = Query(25, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> UnresolvedPageResponse:
@@ -97,7 +99,7 @@ def unresolved(
     carries its own list of rejected candidates. The worst case for one large
     response is exactly the case that produces one.
     """
-    page = unresolved_page(session, limit=limit, offset=offset)
+    page = unresolved_page(session, limit=limit, offset=offset, user_id=user)
     return UnresolvedPageResponse(
         total=page.total,
         items=[
@@ -172,6 +174,7 @@ def search(
 @router.get("/resolutions", response_model=list[ResolvedTitleResponse])
 def decided(
     session: SessionDep,
+    user: UserDep,
     limit: int = Query(RECENT_RESOLUTIONS, ge=1, le=100),
 ) -> list[ResolvedTitleResponse]:
     """What somebody decided by hand, most recently decided first.
@@ -195,7 +198,7 @@ def decided(
             resolved_at=decision.resolved_at,
             candidates=[TitleCandidate(**candidate) for candidate in decision.candidates],
         )
-        for decision in recent_resolutions(session, limit=limit)
+        for decision in recent_resolutions(session, limit=limit, user_id=user)
     ]
 
 
@@ -205,6 +208,7 @@ def choose(
     body: ManualResolutionRequest,
     session: SessionDep,
     catalogue: CatalogueDep,
+    user: UserDep,
 ) -> ManualResolutionResponse:
     """Record the answer a person gave, and link every row waiting on it.
 
@@ -213,7 +217,11 @@ def choose(
     """
     try:
         fixed = resolve_manually(
-            session, catalogue, resolution_id=resolution_id, node_id=body.node_id
+            session,
+            catalogue,
+            resolution_id=resolution_id,
+            node_id=body.node_id,
+            user_id=user,
         )
     except ResolutionNotFound as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error

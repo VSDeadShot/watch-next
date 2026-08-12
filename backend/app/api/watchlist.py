@@ -15,7 +15,7 @@ watchlist points at titles the catalogue has already given us.
 
 from fastapi import APIRouter, HTTPException, Response, status
 
-from app.api.deps import SessionDep, SettingsDep
+from app.api.deps import SessionDep, SettingsDep, UserDep
 from app.core.genres import genre_name
 from app.models import WatchlistItem
 from app.schemas import (
@@ -41,7 +41,10 @@ router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
 @router.get("", response_model=list[WatchlistItemResponse])
 def mine(
-    session: SessionDep, settings: SettingsDep, include_watched: bool = False
+    session: SessionDep,
+    settings: SettingsDep,
+    user: UserDep,
+    include_watched: bool = False,
 ) -> list[WatchlistItemResponse]:
     """The list, newest decision first, each row saying where to watch it.
 
@@ -50,17 +53,19 @@ def mine(
             the ordinary question is "what have I still got waiting", and a list
             that keeps growing with things already seen stops being read.
     """
-    items = entries(session, include_watched=include_watched)
+    items = entries(session, include_watched=include_watched, user_id=user)
     # One lookup for the whole page. Availability per row would be a query per
     # poster, which is invisible at three entries and absurd at three hundred --
     # the same argument that has the titles loaded in one query on the way out.
-    where = watch_on_for(session, [item.title_id for item in items], country=settings.jw_country)
+    where = watch_on_for(
+        session, [item.title_id for item in items], country=settings.jw_country, user_id=user
+    )
     return [_as_response(item, where.get(item.title_id, ())) for item in items]
 
 
 @router.post("", response_model=WatchlistItemResponse)
 def add_title(
-    body: WatchlistAddRequest, session: SessionDep, settings: SettingsDep
+    body: WatchlistAddRequest, session: SessionDep, settings: SettingsDep, user: UserDep
 ) -> WatchlistItemResponse:
     """Put a title on the list.
 
@@ -71,19 +76,25 @@ def add_title(
     created to satisfy that is our bookkeeping rather than the client's business.
     """
     try:
-        item = add(session, body.title_id, note=body.note)
+        item = add(session, body.title_id, note=body.note, user_id=user)
     except TitleNotInCatalogue as error:
         # The title is not in the catalogue at all, which is a different problem
         # from an entry that is not on the list, and has a different fix:
         # resolve the library rather than add the entry again.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 
-    return _as_response(item, _where(session, item.title_id, country=settings.jw_country))
+    return _as_response(
+        item, _where(session, item.title_id, country=settings.jw_country, user_id=user)
+    )
 
 
 @router.patch("/{title_id}", response_model=WatchlistItemResponse)
 def change(
-    title_id: int, body: WatchlistUpdateRequest, session: SessionDep, settings: SettingsDep
+    title_id: int,
+    body: WatchlistUpdateRequest,
+    session: SessionDep,
+    settings: SettingsDep,
+    user: UserDep,
 ) -> WatchlistItemResponse:
     """Tick an entry off, un-tick it, or change its note.
 
@@ -95,18 +106,19 @@ def change(
     sent = body.model_fields_set
     try:
         if "watched" in sent and body.watched is not None:
-            set_watched(session, title_id, watched=body.watched)
+            set_watched(session, title_id, watched=body.watched, user_id=user)
         if "note" in sent:
-            set_note(session, title_id, note=body.note)
+            set_note(session, title_id, note=body.note, user_id=user)
         return _as_response(
-            entry(session, title_id), _where(session, title_id, country=settings.jw_country)
+            entry(session, title_id, user_id=user),
+            _where(session, title_id, country=settings.jw_country, user_id=user),
         )
     except WatchlistItemNotFound as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 
 
 @router.delete("/{title_id}", status_code=status.HTTP_204_NO_CONTENT)
-def drop(title_id: int, session: SessionDep) -> Response:
+def drop(title_id: int, session: SessionDep, user: UserDep) -> Response:
     """Take a title off the list entirely.
 
     Deliberately not the same as ticking it off. This says "I no longer want
@@ -117,7 +129,7 @@ def drop(title_id: int, session: SessionDep) -> Response:
     The effect is the same either way, but a client that believed it had the
     entry is looking at a stale list and should find out.
     """
-    if not remove(session, title_id):
+    if not remove(session, title_id, user_id=user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"title {title_id} is not on the watchlist",
@@ -125,9 +137,17 @@ def drop(title_id: int, session: SessionDep) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def _where(session: SessionDep, title_id: int, *, country: str) -> tuple[WatchOn, ...]:
-    """Where one entry can be watched. The batched lookup, asked for one row."""
-    return watch_on_for(session, [title_id], country=country)[title_id]
+def _where(
+    session: SessionDep, title_id: int, *, country: str, user_id: str
+) -> tuple[WatchOn, ...]:
+    """Where one entry can be watched. The batched lookup, asked for one row.
+
+    Takes user_id rather than defaulting it, even though it is a helper and
+    not a route. It is the one place in app/api/ that reaches a user-scoped
+    service indirectly, which is exactly the shape a check on endpoint functions
+    alone would miss -- so it carries the argument like everything else here.
+    """
+    return watch_on_for(session, [title_id], country=country, user_id=user_id)[title_id]
 
 
 def _as_response(item: WatchlistItem, where: tuple[WatchOn, ...]) -> WatchlistItemResponse:

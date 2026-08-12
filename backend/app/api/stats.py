@@ -12,7 +12,7 @@ a request against JustWatch. This is the whole app read back.
 
 from fastapi import APIRouter
 
-from app.api.deps import SessionDep
+from app.api.deps import SessionDep, UserDep
 from app.core.genres import genre_name
 from app.core.stats import Count, MonthCount, Statistics, YouTubeStatistics
 from app.schemas import (
@@ -29,9 +29,9 @@ router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 
 @router.get("", response_model=StatsResponse)
-def mine(session: SessionDep) -> StatsResponse:
+def mine(session: SessionDep, user: UserDep) -> StatsResponse:
     """Count both histories, and say what could not be counted."""
-    found = overview(session)
+    found = overview(session, user_id=user)
     return StatsResponse(
         history=_history(found.history),
         youtube=_youtube(found.youtube),

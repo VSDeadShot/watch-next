@@ -13,7 +13,7 @@ can quietly turn this into a feed.
 
 from fastapi import APIRouter
 
-from app.api.deps import CatalogueDep, SessionDep
+from app.api.deps import CatalogueDep, SessionDep, UserDep
 from app.core.genres import genre_name
 from app.core.scoring import RecommendationRequest
 from app.schemas import (
@@ -30,7 +30,10 @@ router = APIRouter(prefix="/api", tags=["recommend"])
 
 @router.post("/recommend", response_model=RecommendationResponse)
 def recommend_one(
-    body: RecommendationRequestBody, session: SessionDep, catalogue: CatalogueDep
+    body: RecommendationRequestBody,
+    session: SessionDep,
+    catalogue: CatalogueDep,
+    user: UserDep,
 ) -> RecommendationResponse:
     """Choose one thing to watch, or say why there is nothing.
 
@@ -48,6 +51,7 @@ def recommend_one(
             kind=body.kind,
         ),
         exclude_ids=body.exclude_ids,
+        user_id=user,
     )
 
     return RecommendationResponse(

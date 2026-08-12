@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
-from app.api.deps import SessionDep, SettingsDep
+from app.api.deps import SessionDep, SettingsDep, UserDep
 from app.core.netflix_parser import NetflixExportError, NetflixTooLargeError
 from app.core.youtube_parser import YouTubeExportError
 from app.schemas import ImportSummaryResponse
@@ -24,6 +24,7 @@ async def import_netflix(
     file: Annotated[UploadFile, File()],
     session: SessionDep,
     settings: SettingsDep,
+    user: UserDep,
 ) -> ImportSummaryResponse:
     """Import a Netflix viewing-history export.
 
@@ -58,6 +59,7 @@ async def import_netflix(
             filename=file.filename,
             min_watch_seconds=settings.min_watch_seconds,
             max_history_bytes=settings.max_history_bytes,
+            user_id=user,
         )
     # Before the base class it derives from: a compressed archive can be small
     # enough to accept and still unpack to more than the parser will read, and
@@ -86,6 +88,7 @@ async def import_netflix(
 def import_youtube(
     file: Annotated[UploadFile, File()],
     session: SessionDep,
+    user: UserDep,
 ) -> ImportSummaryResponse:
     """Import a Google Takeout YouTube watch history.
 
@@ -94,7 +97,7 @@ def import_youtube(
     repeatedly with the same file.
     """
     try:
-        summary = import_youtube_export(session, file.file, filename=file.filename)
+        summary = import_youtube_export(session, file.file, filename=file.filename, user_id=user)
     except YouTubeExportError as error:
         # Rolls back whatever the stream managed to write before it failed. A
         # truncated download is only discovered part way through, so without
