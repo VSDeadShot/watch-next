@@ -56,6 +56,15 @@ POPULAR_RESULTS = 50
 # infrastructure and we are not a paying customer of it.
 MIN_REQUEST_INTERVAL_SECONDS = 1.0
 
+# The most requests one HTTP call may ask a pass to spend. At the interval above
+# this is already a quarter of an hour inside a single request, which is well
+# past what any caller should be asking for -- the endpoints report `remaining`
+# so that batches can be driven in a loop. It is input hygiene rather than a
+# safety limit: a caller may still omit the limit entirely and get the whole
+# library, and what stops that costing the app anything is
+# `services/single_flight`, not this number.
+MAX_REQUESTS_PER_PASS = 1000
+
 MAX_ATTEMPTS = 3
 BACKOFF_BASE_SECONDS = 1.0
 

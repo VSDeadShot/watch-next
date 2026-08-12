@@ -20,7 +20,7 @@ from app.schemas import (
     UnresolvedPageResponse,
     UnresolvedTitleResponse,
 )
-from app.services.justwatch_client import UnusableCatalogueEntry
+from app.services.justwatch_client import MAX_REQUESTS_PER_PASS, UnusableCatalogueEntry
 from app.services.resolver import (
     RECENT_RESOLUTIONS,
     ResolutionNotFound,
@@ -30,6 +30,7 @@ from app.services.resolver import (
     search_candidates,
     unresolved_page,
 )
+from app.services.single_flight import PassAlreadyRunning
 
 router = APIRouter(prefix="/api/titles", tags=["titles"])
 
@@ -43,7 +44,7 @@ def resolve(
     session: SessionDep,
     catalogue: CatalogueDep,
     retry_unresolved: bool = False,
-    limit: int | None = Query(None, ge=1),
+    limit: int | None = Query(None, ge=1, le=MAX_REQUESTS_PER_PASS),
 ) -> ResolveSummaryResponse:
     """Look up distinct titles that do not already have an answer.
 
@@ -62,7 +63,15 @@ def resolve(
     library, and abandoning the rest of it because one request timed out would
     mean starting over.
     """
-    summary = resolve_library(session, catalogue, retry_unresolved=retry_unresolved, limit=limit)
+    try:
+        summary = resolve_library(
+            session, catalogue, retry_unresolved=retry_unresolved, limit=limit
+        )
+    except PassAlreadyRunning as error:
+        # 409 rather than 429: nothing here is rate limiting the caller, and
+        # waiting a moment will not help. The state of the process conflicts
+        # with the request, and the fix is to let the other pass finish.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return ResolveSummaryResponse(
         searched=summary.searched,
         resolved=summary.resolved,

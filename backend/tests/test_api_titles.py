@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_catalogue
 from app.db import get_db
 from app.main import app
-from app.services.justwatch_client import CatalogueEntry
+from app.services.justwatch_client import MAX_REQUESTS_PER_PASS, CatalogueEntry
+from app.services.single_flight import budget
 
 RESOLVE = "/api/titles/resolve"
 UNRESOLVED = "/api/titles/unresolved"
@@ -492,3 +493,61 @@ class TestWhatWasDecidedByHand:
 
     def test_an_absurd_limit_is_rejected(self, client: TestClient):
         assert client.get(RESOLUTIONS, params={"limit": 0}).status_code == 422
+
+
+class TestRefusingASecondPass:
+    """Two passes at once were never faster, only twice as expensive.
+
+    The JustWatch client paces every request at one a second behind a
+    process-wide lock, so concurrent passes take turns rather than running in
+    parallel. What each one does hold is a worker thread, out of the forty
+    shared by every route in this app -- including `/health`. See
+    `app/services/single_flight.py` for the measurements.
+    """
+
+    def test_a_second_pass_is_refused_while_one_is_running(self, client: TestClient):
+        with budget.claim("resolve"):
+            response = client.post(RESOLVE)
+
+        assert response.status_code == 409
+
+    def test_the_refusal_says_what_to_wait_for(self, client: TestClient):
+        with budget.claim("refresh"):
+            detail = client.post(RESOLVE).json()["detail"]
+
+        assert "refresh" in detail
+
+    def test_the_pass_runs_again_once_the_budget_is_free(self, client: TestClient):
+        """The refusal must be about what is running now, not a latch that
+        stays shut."""
+        with budget.claim("resolve"):
+            assert client.post(RESOLVE).status_code == 409
+
+        assert client.post(RESOLVE).status_code == 200
+
+    def test_the_budget_is_released_even_when_a_pass_blows_up(
+        self, client: TestClient, catalogue: FakeCatalogue, watched
+    ):
+        """A pass that raised something it does not handle must not leave the
+        endpoint refusing every caller until the process restarts. `RuntimeError`
+        rather than a `JustWatchError`, which the pass contains and counts --
+        the point here is the failure nothing was expecting."""
+        watched("Inception")
+        catalogue.results["Inception"] = RuntimeError("something nobody planned for")
+
+        with pytest.raises(RuntimeError):
+            client.post(RESOLVE)
+
+        catalogue.results["Inception"] = [INCEPTION]
+        assert client.post(RESOLVE).status_code == 200
+
+    def test_an_absurd_limit_is_rejected_rather_than_quietly_clamped(self, client: TestClient):
+        response = client.post(RESOLVE, params={"limit": MAX_REQUESTS_PER_PASS + 1})
+
+        assert response.status_code == 422
+
+    def test_the_largest_allowed_limit_is_accepted(self, client: TestClient):
+        """The boundary from the side that must not be refused."""
+        response = client.post(RESOLVE, params={"limit": MAX_REQUESTS_PER_PASS})
+
+        assert response.status_code == 200

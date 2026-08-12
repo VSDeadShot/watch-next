@@ -23,7 +23,8 @@ from app.core.availability import Monetization
 from app.db import get_db
 from app.main import app
 from app.models import Title
-from app.services.justwatch_client import CatalogueEntry, OfferEntry
+from app.services.justwatch_client import MAX_REQUESTS_PER_PASS, CatalogueEntry, OfferEntry
+from app.services.single_flight import budget
 
 REFRESH = "/api/offers/refresh"
 
@@ -185,3 +186,37 @@ class TestItDoesNotReAskWhatIsFresh:
 
         assert body["refreshed"] == 0
         assert catalogue.looked_up == []
+
+
+class TestRefusingASecondPass:
+    """Refresh and resolution spend one budget between them, so the guard is
+    shared: two passes of different kinds contend exactly as two of the same
+    kind do. See `app/services/single_flight.py`."""
+
+    def test_a_refresh_is_refused_while_a_resolve_is_running(self, client: TestClient):
+        with budget.claim("resolve"):
+            response = client.post(REFRESH)
+
+        assert response.status_code == 409
+
+    def test_the_refusal_names_the_pass_in_the_way(self, client: TestClient):
+        with budget.claim("resolve"):
+            detail = client.post(REFRESH).json()["detail"]
+
+        assert "resolve" in detail
+
+    def test_it_refreshes_again_once_the_budget_is_free(self, client: TestClient):
+        with budget.claim("resolve"):
+            assert client.post(REFRESH).status_code == 409
+
+        assert client.post(REFRESH).status_code == 200
+
+    def test_an_absurd_limit_is_rejected_rather_than_quietly_clamped(self, client: TestClient):
+        response = client.post(REFRESH, params={"limit": MAX_REQUESTS_PER_PASS + 1})
+
+        assert response.status_code == 422
+
+    def test_the_largest_allowed_limit_is_accepted(self, client: TestClient):
+        response = client.post(REFRESH, params={"limit": MAX_REQUESTS_PER_PASS})
+
+        assert response.status_code == 200

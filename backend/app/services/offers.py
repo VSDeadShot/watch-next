@@ -27,6 +27,7 @@ from app.core.availability import Offer as OfferRecord
 from app.core.availability import is_stale
 from app.models import Offer, Title
 from app.services.justwatch_client import CatalogueLookup, OfferEntry
+from app.services.single_flight import one_at_a_time
 
 _log = logging.getLogger(__name__)
 
@@ -202,6 +203,7 @@ def titles_needing_refresh(
     return stale if limit is None else stale[:limit]
 
 
+@one_at_a_time("refresh")
 def refresh_stale_offers(
     session: Session,
     catalogue: CatalogueLookup,
@@ -215,6 +217,11 @@ def refresh_stale_offers(
     One lookup per title, because ``details`` returns the offers along with
     everything else -- the same trick that makes resolution fill the cache for
     free.
+
+    Raises:
+        PassAlreadyRunning: if another pass holds the budget. See
+            :mod:`app.services.single_flight` -- resolution spends the same
+            one-a-second allowance, so the two cannot usefully overlap.
     """
     when = now or datetime.now(UTC)
     summary = RefreshSummary()

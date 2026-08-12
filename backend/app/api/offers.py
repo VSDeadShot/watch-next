@@ -12,11 +12,13 @@ second against an unofficial API, so a whole catalogue inside one HTTP request
 is minutes of a browser waiting with no way out.
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CatalogueDep, SessionDep
 from app.schemas import RefreshSummaryResponse
+from app.services.justwatch_client import MAX_REQUESTS_PER_PASS
 from app.services.offers import refresh_stale_offers
+from app.services.single_flight import PassAlreadyRunning
 
 router = APIRouter(prefix="/api/offers", tags=["offers"])
 
@@ -25,7 +27,7 @@ router = APIRouter(prefix="/api/offers", tags=["offers"])
 def refresh(
     session: SessionDep,
     catalogue: CatalogueDep,
-    limit: int | None = Query(None, ge=1),
+    limit: int | None = Query(None, ge=1, le=MAX_REQUESTS_PER_PASS),
 ) -> RefreshSummaryResponse:
     """Re-ask JustWatch about the titles whose availability has gone stale.
 
@@ -41,11 +43,17 @@ def refresh(
     old ``offers_fetched_at``: marking it fetched would buy it another week of
     being treated as known when nothing was learned about it at all.
     """
-    summary = (
-        refresh_stale_offers(session, catalogue)
-        if limit is None
-        else refresh_stale_offers(session, catalogue, limit=limit)
-    )
+    try:
+        summary = (
+            refresh_stale_offers(session, catalogue)
+            if limit is None
+            else refresh_stale_offers(session, catalogue, limit=limit)
+        )
+    except PassAlreadyRunning as error:
+        # 409 rather than 429: nothing is rate limiting this caller, and trying
+        # again in a second will not help. The conflict is with a pass already
+        # running, and the fix is to let it finish.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return RefreshSummaryResponse(
         refreshed=summary.refreshed,
         failed=summary.failed,

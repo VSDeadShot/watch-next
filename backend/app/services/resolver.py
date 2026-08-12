@@ -45,6 +45,7 @@ from app.core.title_parser import TitleKind
 from app.models import DEFAULT_USER_ID, Title, TitleResolution, WatchEvent
 from app.services.justwatch_client import CatalogueEntry, CatalogueLookup, CatalogueSearch
 from app.services.offers import store_offers
+from app.services.single_flight import one_at_a_time
 from app.services.titles import title_from_entry
 
 _log = logging.getLogger(__name__)
@@ -97,6 +98,7 @@ class _Question:
     event_ids: list[int] = field(default_factory=list)
 
 
+@one_at_a_time("resolve")
 def resolve_library(
     session: Session,
     catalogue: CatalogueSearch,
@@ -112,6 +114,11 @@ def resolve_library(
             default, because the catalogue rarely changes between two runs an
             hour apart and asking costs requests. Worth turning on occasionally;
             never worth doing automatically.
+
+    Raises:
+        PassAlreadyRunning: if another pass holds the budget. See
+            :mod:`app.services.single_flight` -- a second pass would not finish
+            sooner and would hold a worker thread the whole time it waited.
     """
     # Each of these reads its table exactly once. Everything after works from
     # memory, so the cost of a pass is set by how many searches it makes rather
