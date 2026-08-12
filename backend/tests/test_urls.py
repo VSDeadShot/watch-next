@@ -17,7 +17,7 @@ is the list of things somebody thought of.
 
 import pytest
 
-from app.core.urls import is_web_url
+from app.core.urls import CATALOGUE_IMAGE_HOST, is_catalogue_image_url, is_web_url
 
 # Spelled out, because a literal backslash at the end of a string cannot be
 # written raw and an escaped one is easy to misread as two characters.
@@ -85,6 +85,32 @@ REFUSED = [
     "",
     "   ",
     "\n",
+]
+
+
+CATALOGUE_IMAGES = [
+    "https://images.justwatch.com/poster/302061947/s718/inception.jpg",
+    "https://images.justwatch.com/icon/207360008/s100/netflix.png",
+    # The host is case-insensitive, and `urlparse` lowercases it.
+    "https://IMAGES.JUSTWATCH.COM/poster/1/s718/x.jpg",
+    "https://images.justwatch.com/poster/1/s718/caf%C3%A9.jpg",
+]
+
+IMAGES_FROM_ELSEWHERE = [
+    # The two shapes the library's concatenation admits. Both of these are what
+    # you get by putting a string in a field documented to hold a path, and both
+    # pass the link check, which is the entire argument for a second function.
+    "https://images.justwatch.com@evil.test/x.jpg",
+    "https://images.justwatch.com.evil.test/x.jpg",
+    "https://images.justwatch.com%2F@evil.test/x.jpg",
+    "https://images.justwatch.com@evil.test:443/x.jpg",
+    # A subdomain is not the host either. It could be legitimate one day, at
+    # which point this is a one-line change made on purpose rather than a hole
+    # that was open the whole time.
+    "https://cdn.images.justwatch.com/x.jpg",
+    "https://justwatch.com/x.jpg",
+    # An unrelated host, stated plainly so the list is not all trickery.
+    "https://evil.test/x.jpg",
 ]
 
 
@@ -192,3 +218,122 @@ class TestWhereTheTwoUrlStandardsDisagree:
     @pytest.mark.parametrize("url", ["https:///path", "https:////a", "http:///x"])
     def test_an_empty_authority_refuses_it(self, url: str):
         assert is_web_url(url) is False
+
+
+class TestAnImageIsHeldToOneHost:
+    """A poster and a provider icon are held to the host they come from.
+
+    A link and an image are not the same risk. A link needs a click; an ``src``
+    is fetched the moment the page renders, so a hostile host is handed the
+    viewer's IP address and user agent with no action on their part -- and this
+    app's whole subject matter is what somebody watches.
+
+    The reason the check is affordable is that the host is not really JustWatch's
+    to choose. The client library *builds* both fields by string concatenation
+    onto a constant of its own -- ``_IMAGES_URL + json["posterUrl"]`` -- so a
+    URL naming any other host is already a URL nobody intended. And it is that
+    same concatenation that makes it forgeable, because nothing separates the
+    constant from the field:
+
+        posterUrl = "/poster/1/s718/x.jpg"  ->  host images.justwatch.com
+        posterUrl = "@evil.test/x.jpg"      ->  host evil.test
+        posterUrl = ".evil.test/x.jpg"      ->  host images.justwatch.com.evil.test
+
+    ``frontend/next.config.ts`` already commits to exactly this host for the two
+    posters, which go through ``next/image``; measured, its optimiser answers
+    400 to every off-list host before making any outbound request. So this is
+    not new policy. It extends the policy that already exists to the two places
+    it does not reach: the value we store, and the provider icon, which is a
+    deliberate plain ``<img>`` and therefore goes nowhere near the optimiser.
+    """
+
+    @pytest.mark.parametrize("url", CATALOGUE_IMAGES)
+    def test_an_image_from_the_catalogue_host_is_usable(self, url: str):
+        assert is_catalogue_image_url(url) is True
+
+    @pytest.mark.parametrize("url", IMAGES_FROM_ELSEWHERE)
+    def test_any_other_host_is_refused(self, url: str):
+        assert is_catalogue_image_url(url) is False
+
+    @pytest.mark.parametrize("url", IMAGES_FROM_ELSEWHERE)
+    def test_the_link_check_would_have_allowed_every_one_of_them(self, url: str):
+        """The other half of the case above.
+
+        Without this, a reader cannot tell whether the host check is doing the
+        work or whether `is_web_url` was already refusing these for some other
+        reason -- and if it were, the whole class would be testing nothing.
+        """
+        assert is_web_url(url) is True
+
+    def test_plain_http_from_the_right_host_is_refused(self):
+        """Which `is_web_url` allows, and the image optimiser does not.
+
+        `next.config.ts` names a protocol as well as a hostname, and measuring
+        it confirmed `http://images.justwatch.com/x.jpg` answers 400. Every real
+        URL from this host is https, so matching the stricter of the two rules
+        costs nothing and keeps the backend and the optimiser saying the same
+        thing about the same string."""
+        assert is_web_url("http://images.justwatch.com/x.jpg") is True
+        assert is_catalogue_image_url("http://images.justwatch.com/x.jpg") is False
+
+    def test_a_trailing_dot_on_the_host_is_refused(self):
+        """A fully qualified name a browser would treat as the same host.
+
+        Refused anyway, and worth being clear that this one is not an attack --
+        it is the cost of comparing the authority as a string. Nothing produces
+        this shape, and the alternative is a normalization step, which is how a
+        host check starts disagreeing with the browser it is protecting."""
+        assert is_catalogue_image_url("https://images.justwatch.com./x.jpg") is False
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://images.justwatch.com:8443/x.jpg",
+            "https://images.justwatch.com:443/x.jpg",
+            "https://user:pw@images.justwatch.com/x.jpg",
+        ],
+    )
+    def test_a_port_or_userinfo_is_refused_even_naming_the_right_host(self, url: str):
+        """The two places this is stricter than the browser, on purpose.
+
+        `new URL` in the frontend mirror reports the host it will connect to, so
+        it drops a default port and resolves userinfo away and accepts both of
+        these -- running the two implementations over the same sixty-two cases
+        is how that was found rather than assumed. Neither is a hole: they do
+        fetch from the allowlisted host.
+
+        Refused here anyway, because comparing the authority as one string is
+        the version with no normalization step in it, and normalization is how a
+        host check starts disagreeing with the browser it is protecting. Being
+        stricter than necessary in two shapes nothing produces is the cheaper
+        mistake, and the divergence only ever runs in this direction.
+        """
+        assert is_catalogue_image_url(url) is False
+
+    @pytest.mark.parametrize("url", [*REFUSED, "https://images.justwatch.com/a b.jpg"])
+    def test_it_still_refuses_everything_a_link_would(self, url: str | None):
+        """The host rule is added to the link rule, not swapped for it. A
+        `javascript:` URL does not become acceptable by having the right
+        authority -- `javascript://images.justwatch.com/%0aalert(1)` is in the
+        table this reuses."""
+        assert is_catalogue_image_url(url) is False
+
+    def test_the_host_is_the_one_the_client_library_builds_from(self):
+        """Pinned to the installed library rather than to a comment.
+
+        Both fields arrive as `_IMAGES_URL + path`, so our constant and theirs
+        have to be the same string or every image in the app disappears at once.
+        Read out of the library so that a change on their side fails one test
+        with a legible message, instead of being discovered as a page of broken
+        images.
+        """
+        try:
+            from simplejustwatchapi.query import _IMAGES_URL
+        except ImportError:  # pragma: no cover -- the point of the message
+            pytest.fail(
+                "simplejustwatchapi.query._IMAGES_URL is gone. It is where both "
+                "poster_url and icon_url get their host, so find what replaced "
+                "it and check CATALOGUE_IMAGE_HOST still matches."
+            )
+        ours = f"https://{CATALOGUE_IMAGE_HOST}"
+        assert ours == _IMAGES_URL

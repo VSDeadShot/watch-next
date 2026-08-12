@@ -64,7 +64,7 @@ class TestRefreshingTheCatalogue:
                     "nfx",
                     "Netflix",
                     technical_name="netflix",
-                    icon_url="https://img/nfx.png",
+                    icon_url="https://images.justwatch.com/icon/207360008/s100/netflix.png",
                     monetization_types=("FLATRATE", "BUY"),
                 )
             ]
@@ -75,7 +75,7 @@ class TestRefreshingTheCatalogue:
         row = stored(session)["nfx"]
         assert row.name == "Netflix"
         assert row.technical_name == "netflix"
-        assert row.icon_url == "https://img/nfx.png"
+        assert row.icon_url == "https://images.justwatch.com/icon/207360008/s100/netflix.png"
         assert row.monetization_types == ["FLATRATE", "BUY"]
         assert row.country == "IN"
         assert row.fetched_at == NOW

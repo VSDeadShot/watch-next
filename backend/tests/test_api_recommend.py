@@ -38,7 +38,7 @@ def entry(node_id: str, **overrides) -> CatalogueEntry:
         "runtime_minutes": 100,
         "genres": ("cmy",),
         "imdb_score": 8.2,
-        "poster_url": "https://img/poster.jpg",
+        "poster_url": "https://images.justwatch.com/poster/302061947/s718/x.jpg",
         "offers": (
             OfferEntry(
                 provider=NETFLIX, monetization="FLATRATE", url="https://netflix.com/title/1"
@@ -143,7 +143,7 @@ class TestWhatComesBackWithIt:
         title = client.post(RECOMMEND, json={}).json()["title"]
 
         assert title["title"] == "Inception"
-        assert title["poster_url"] == "https://img/poster.jpg"
+        assert title["poster_url"] == "https://images.justwatch.com/poster/302061947/s718/x.jpg"
         assert title["runtime_minutes"] == 100
         # In English, not JustWatch's private shortcodes: a client handed "cmy"
         # can only print it or keep its own copy of our genre table.

@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import type { RecommendedTitle } from "@/lib/types";
-import { webUrl } from "@/lib/urls";
+import { imageUrl, webUrl } from "@/lib/urls";
 
 /**
  * The answer. The only thing in this app allowed to be loud.
@@ -112,7 +112,14 @@ export default function RecommendationCard({
 }
 
 function Poster({ title }: { title: RecommendedTitle }) {
-  if (!title.poster_url) {
+  // The optimiser refuses an off-list host too, with a 400 before it makes any
+  // outbound request, so for a poster this is the second of two checks rather
+  // than the only one. Here anyway, because a component rendering somebody
+  // else's string should not have to know which of its images happen to be
+  // routed through something that also checks.
+  const poster = imageUrl(title.poster_url);
+
+  if (!poster) {
     return (
       <div
         aria-hidden
@@ -133,7 +140,7 @@ function Poster({ title }: { title: RecommendedTitle }) {
   return (
     <div className="relative h-[38vh] max-h-[420px] min-h-[200px] w-full bg-raised sm:h-auto sm:max-h-none sm:aspect-[2/3]">
       <Image
-        src={title.poster_url}
+        src={poster}
         alt={`Poster for ${title.title}`}
         fill
         // The largest thing on the page and the reason this reads as a reveal

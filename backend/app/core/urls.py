@@ -100,3 +100,52 @@ def is_web_url(value: str | None) -> bool:
     # so a mutation that removes this changes nothing and no test can tell --
     # it is here so the rule does not silently depend on that staying true.
     return parsed.scheme.lower() in _FOLLOWABLE_SCHEMES and bool(parsed.netloc)
+
+
+#: Where every poster and provider icon in this app comes from.
+#:
+#: Not a guess about JustWatch's infrastructure -- it is a constant inside the
+#: client library, which builds both fields by concatenating it onto a path out
+#: of the API response. ``tests/test_urls.py`` reads the library's own copy and
+#: compares, so if they move it, one test says so with a sentence rather than
+#: every image quietly failing to load.
+#:
+#: ``frontend/next.config.ts`` names this same host to Next's image optimiser,
+#: and imports it from ``lib/urls.ts`` so there is one spelling of it per side
+#: rather than three in total.
+CATALOGUE_IMAGE_HOST = "images.justwatch.com"
+
+
+def is_catalogue_image_url(value: str | None) -> bool:
+    """Whether ``value`` is an image this app is willing to make the browser fetch.
+
+    Stricter than :func:`is_web_url`, and deliberately so: an ``href`` waits for
+    a click, but a ``src`` is fetched as the page renders, which hands the host
+    the viewer's IP address and user agent for nothing. Given what this app is
+    about, the request itself is the disclosure.
+
+    The host is affordable to pin because it is not JustWatch's to vary. The
+    client library builds these two fields as ``_IMAGES_URL + path``, so any
+    other authority means the path did the moving -- and with no separator
+    between the two, a field of ``@evil.test/x.jpg`` yields a URL whose host is
+    ``evil.test`` and whose scheme and shape are otherwise perfect.
+
+    Compared against the whole authority rather than the parsed hostname, which
+    refuses a port and any userinfo in the same comparison. Nothing legitimate
+    here carries either, and an authority that is exactly the host is one this
+    check and the browser cannot read differently.
+    """
+    if not is_web_url(value):
+        return False
+    # `is_web_url` returning True means this parsed once already, so it cannot
+    # raise here. Reparsed rather than plumbed through, because a function that
+    # returns a bool and a parse result is two functions.
+    parsed = urlparse(value)
+    # https only. `is_web_url` allows either scheme, since an http link is a
+    # link; the optimiser in next.config.ts allows only https, and every real
+    # URL from this host is https, so this matches the stricter of the two.
+    if parsed.scheme.lower() != "https":
+        return False
+    # `.lower()` is load-bearing here, unlike on the scheme: `urlparse`
+    # normalises the case of `.hostname` but leaves `.netloc` as it arrived.
+    return parsed.netloc.lower() == CATALOGUE_IMAGE_HOST

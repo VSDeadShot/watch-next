@@ -31,7 +31,7 @@ NETFLIX = ProviderEntry(
     technical_name="netflix",
     name="Netflix",
     monetization_types=("FLATRATE",),
-    icon_url="https://img/nfx.png",
+    icon_url="https://images.justwatch.com/icon/207360008/s100/netflix.png",
 )
 PRIME = ProviderEntry(
     short_name="prv",
@@ -102,7 +102,7 @@ class TestListingWhatExists:
 
         assert netflix["short_name"] == "nfx"
         assert netflix["technical_name"] == "netflix"
-        assert netflix["icon_url"] == "https://img/nfx.png"
+        assert netflix["icon_url"] == "https://images.justwatch.com/icon/207360008/s100/netflix.png"
         assert netflix["monetization_types"] == ["FLATRATE"]
 
     def test_they_are_ordered_for_a_person_to_read(self, client: TestClient):
@@ -111,6 +111,40 @@ class TestListingWhatExists:
         names = [provider["name"] for provider in client.get(CATALOGUE).json()["providers"]]
 
         assert names == ["Amazon Prime Video", "JioHotstar", "Netflix"]
+
+    def test_an_icon_already_stored_from_another_host_does_not_come_back(
+        self, client: TestClient, catalogue: FakeCatalogue
+    ):
+        """The case the check on the way out exists for.
+
+        This fake catalogue hands the service a record directly, which is exactly
+        the shape of a row written before the client learned to refuse one -- and
+        a provider row has no TTL, so nothing would ever revisit it. The refresh
+        stores it and the listing declines to serve it.
+
+        The value is what the client library builds from a JSON field of
+        "@evil.test/x.jpg": its own host, then the field, nothing in between. An
+        `src` is fetched as the settings page draws, so serving this would hand
+        that host the viewer's address for the price of opening the page.
+        """
+        catalogue.listed = [
+            ProviderEntry(
+                short_name="nfx",
+                technical_name="netflix",
+                name="Netflix",
+                icon_url="https://images.justwatch.com@evil.test/x.png",
+            )
+        ]
+        client.post(REFRESH)
+
+        [netflix] = client.get(CATALOGUE).json()["providers"]
+
+        assert netflix["icon_url"] is None
+        # Still listed, and still selectable. Losing a service from the picker
+        # would cost the user a subscription they actually have, which is worse
+        # than a tile with two letters on it.
+        assert netflix["short_name"] == "nfx"
+        assert netflix["name"] == "Netflix"
 
 
 class TestRefreshing:

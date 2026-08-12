@@ -1,6 +1,7 @@
 "use client";
 
 import type { Provider } from "@/lib/types";
+import { imageUrl } from "@/lib/urls";
 
 /**
  * The services picker.
@@ -78,9 +79,16 @@ function ProviderIcon({
   provider: Provider;
   name: string;
 }) {
-  if (!provider.icon_url) {
-    // The catalogue can arrive without one. Two letters of the service's own
-    // name beat a broken image frame or a generic placeholder glyph.
+  // Checked, not just read. This is the one image in the app that does not go
+  // through `next/image`, so its optimiser's host allowlist never sees it --
+  // making `imageUrl` the only thing standing between a catalogue string and a
+  // request the browser makes on its own.
+  const icon = imageUrl(provider.icon_url);
+
+  if (!icon) {
+    // The catalogue can arrive without one, and now also arrives without one if
+    // it came from somewhere unexpected. Two letters of the service's own name
+    // beat a broken image frame or a generic placeholder glyph.
     return (
       <span
         aria-hidden
@@ -97,7 +105,7 @@ function ProviderIcon({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={provider.icon_url}
+      src={icon}
       alt=""
       width={32}
       height={32}

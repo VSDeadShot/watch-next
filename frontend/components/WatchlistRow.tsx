@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useEffect, useId, useRef, useState } from "react";
 import type { WatchlistItem } from "@/lib/types";
-import { webUrl } from "@/lib/urls";
+import { imageUrl, webUrl } from "@/lib/urls";
 
 /**
  * One thing somebody meant to watch.
@@ -261,7 +261,10 @@ function NoteEditor({
 }
 
 function Poster({ item }: { item: WatchlistItem }) {
-  if (!item.poster_url) {
+  // Same rule as the recommendation card's poster, for the same reason.
+  const poster = imageUrl(item.poster_url);
+
+  if (!poster) {
     return (
       <div
         aria-hidden
@@ -277,7 +280,7 @@ function Poster({ item }: { item: WatchlistItem }) {
   return (
     <div className="relative hidden aspect-[2/3] w-[72px] shrink-0 bg-raised sm:block">
       <Image
-        src={item.poster_url}
+        src={poster}
         alt=""
         fill
         sizes="72px"

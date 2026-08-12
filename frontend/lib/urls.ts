@@ -73,3 +73,64 @@ export function webUrl(value: string | null | undefined): string | null {
   // The host as well as the scheme. "https://" parses and names nowhere.
   return FOLLOWABLE.has(parsed.protocol) && parsed.host ? value : null;
 }
+
+/**
+ * The one host every poster and provider icon comes from.
+ *
+ * Exported because `next.config.ts` needs the same string for the image
+ * optimiser's `remotePatterns`, and a hostname spelled twice on one side is a
+ * hostname that will be changed once. `app/core/urls.py` holds the third copy,
+ * unavoidably, and its comment says so.
+ */
+export const CATALOGUE_IMAGE_HOST = "images.justwatch.com";
+
+/**
+ * An image URL if it is one this app will let the browser fetch, otherwise null.
+ *
+ * Stricter than `webUrl`, because an `href` and a `src` are not the same risk.
+ * A link waits for a click; an image is requested as the page draws, so a
+ * hostile host is handed the viewer's IP address and user agent with no action
+ * on their part at all. Given that this app's whole subject is what somebody
+ * watches, the request is itself the disclosure.
+ *
+ * Pinning the host is affordable because it is not really JustWatch's to vary:
+ * the client library builds both fields by concatenating its own constant onto
+ * a path from the response, so any other authority means the path moved it --
+ * and with nothing between the two, a path of `@evil.test/x.jpg` does exactly
+ * that while leaving a URL that otherwise looks perfectly ordinary.
+ *
+ * The two posters go through `next/image`, whose optimiser already refuses an
+ * off-list host with a 400 before making any request, so for those this is the
+ * second of two checks. The provider icon is a deliberate plain `<img>` -- a
+ * fixed 32px logo has nothing for the optimiser to save -- and for that one
+ * this is the only check there is.
+ */
+export function imageUrl(value: string | null | undefined): string | null {
+  if (!value || !webUrl(value)) return null;
+
+  // Reparsed rather than threaded out of `webUrl`, which returns the string it
+  // was given: a function that answers one question is worth more than one that
+  // hands back its working.
+  const parsed = new URL(value);
+
+  // `host` is the host the browser will actually connect to: userinfo resolved
+  // away, a default port dropped, an IDNA hostname already folded. That makes
+  // this the check that matches what happens, which is why it is the one used
+  // here rather than a comparison against the raw authority.
+  //
+  // It also makes this side very slightly more permissive than the backend, and
+  // running both over the same table -- 62 cases -- found exactly where:
+  //
+  //     https://images.justwatch.com:443/x.jpg        backend no, here yes
+  //     https://user:pw@images.justwatch.com/x.jpg    backend no, here yes
+  //
+  // Both of those genuinely do fetch from the allowlisted host, so neither is a
+  // hole; `urlparse` compares the authority as a string and so keeps the port
+  // and the userinfo, which is stricter than it needs to be rather than wrong.
+  // The divergence only ever runs this way, and the backend refuses both on the
+  // way in and on the way out, so nothing shaped like this reaches a browser
+  // through this app's API at all.
+  return parsed.protocol === "https:" && parsed.host === CATALOGUE_IMAGE_HOST
+    ? value
+    : null;
+}

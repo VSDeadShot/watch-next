@@ -31,7 +31,7 @@ from simplejustwatchapi.exceptions import JustWatchError, JustWatchHttpError
 from simplejustwatchapi.tuples import MediaEntry, Offer, OfferPackage
 
 from app.core.matching import Candidate
-from app.core.urls import is_web_url
+from app.core.urls import is_catalogue_image_url, is_web_url
 
 _log = logging.getLogger(__name__)
 
@@ -454,7 +454,7 @@ def _to_provider_entry(package: OfferPackage) -> ProviderEntry:
         technical_name=package.technical_name or "",
         name=package.name or package.short_name,
         monetization_types=tuple(kind for kind in (package.monetization_types or ()) if kind),
-        icon_url=package.icon,
+        icon_url=_catalogue_image(package.icon, kind="provider icon"),
     )
 
 
@@ -491,6 +491,26 @@ def _play_link(url: str | None) -> str | None:
         return url
 
     _log.warning("dropping an unusable offer link from JustWatch: %r", url)
+    return None
+
+
+def _catalogue_image(url: str | None, *, kind: str) -> str | None:
+    """Keep an image URL only if it names the host these are all built from.
+
+    Stricter than the deep link above, because the two are not the same risk: a
+    link waits for a click, and an `src` is fetched as the page draws. `core.urls`
+    carries the reasoning and the shapes that make it necessary.
+
+    Empty becomes null. The library returns "" for a package with no icon, and a
+    blank string in a URL column is a value that has to be remembered about
+    everywhere it is read.
+    """
+    if not url:
+        return None
+    if is_catalogue_image_url(url):
+        return url
+
+    _log.warning("dropping a %s from an unexpected host: %r", kind, url)
     return None
 
 
@@ -546,7 +566,7 @@ def _to_catalogue_entry(entry: MediaEntry) -> CatalogueEntry:
         # JustWatch returns TMDB ids as numbers about as often as strings, and
         # the column is text either way.
         tmdb_id=str(entry.tmdb_id) if entry.tmdb_id is not None else None,
-        poster_url=entry.poster,
+        poster_url=_catalogue_image(entry.poster, kind="poster"),
         # Obscure titles come back with no scoring block at all.
         imdb_score=scoring.imdb_score if scoring else None,
         tmdb_score=scoring.tmdb_score if scoring else None,

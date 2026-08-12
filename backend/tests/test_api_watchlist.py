@@ -46,7 +46,7 @@ def titles(session: Session):
             genres=["scf"],
             release_year=2016,
             runtime_minutes=116,
-            poster_url="https://img/poster.jpg",
+            poster_url="https://images.justwatch.com/poster/302061947/s718/x.jpg",
             imdb_score=7.9,
             **extra,
         )
@@ -74,7 +74,7 @@ class TestAdding:
 
         body = client.post(WATCHLIST, json={"title_id": film.id}).json()
 
-        assert body["poster_url"] == "https://img/poster.jpg"
+        assert body["poster_url"] == "https://images.justwatch.com/poster/302061947/s718/x.jpg"
         assert body["release_year"] == 2016
         assert body["runtime_minutes"] == 116
         assert body["genres"] == ["Science-Fiction"]

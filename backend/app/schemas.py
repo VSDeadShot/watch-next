@@ -1,16 +1,37 @@
 """Request and response bodies. The frontend's `lib/types.ts` mirrors these."""
 
 from datetime import date, datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from app.core.moods import Mood
 from app.core.scoring import KindPreference
+from app.core.urls import is_catalogue_image_url
 
 # Long enough for a reason somebody typed, short enough that the column cannot
 # be used as storage. Bounded here rather than in the database because this is
 # where an arbitrarily long request body would otherwise be accepted.
 NOTE_LIMIT = 500
+
+
+def _only_from_the_catalogue_host(value: str | None) -> str | None:
+    return value if is_catalogue_image_url(value) else None
+
+
+#: A poster or a provider icon on the way out.
+#:
+#: The client already refuses one of these as it arrives, so in a healthy
+#: deployment this never fires. It is here for the rows that predate that check:
+#: unlike an offer, a title and a provider have no TTL, so a poster stored last
+#: month is served unchanged for as long as the row lives, and there is no pass
+#: that would ever come back and reconsider it.
+#:
+#: Declared as a type and applied to every one of these fields, rather than
+#: checked in the five routers that build these models, because a rule in a
+#: router is a rule the sixth router will not have. ``tests/test_schema_images``
+#: asserts that no field of either name escapes it.
+CatalogueImageUrl = Annotated[str | None, AfterValidator(_only_from_the_catalogue_host)]
 
 
 class ImportSummaryResponse(BaseModel):
@@ -142,7 +163,7 @@ class ResolvedTitleResponse(BaseModel):
     title: str
     object_type: str
     release_year: int | None = None
-    poster_url: str | None = None
+    poster_url: CatalogueImageUrl = None
     resolved_at: datetime
     candidates: list[TitleCandidate] = Field(default_factory=list)
 
@@ -164,7 +185,7 @@ class ManualResolutionResponse(BaseModel):
     title: str
     object_type: str
     release_year: int | None = None
-    poster_url: str | None = None
+    poster_url: CatalogueImageUrl = None
     linked_events: int
 
 
@@ -176,7 +197,7 @@ class ProviderResponse(BaseModel):
     short_name: str
     name: str
     technical_name: str
-    icon_url: str | None = None
+    icon_url: CatalogueImageUrl = None
     monetization_types: list[str] = Field(default_factory=list)
 
 
@@ -275,7 +296,7 @@ class WatchlistItemResponse(BaseModel):
     release_year: int | None = None
     runtime_minutes: int | None = None
     genres: list[str] = Field(default_factory=list)
-    poster_url: str | None = None
+    poster_url: CatalogueImageUrl = None
     imdb_score: float | None = None
 
     # Where it can be watched right now, best first. Empty means nowhere the
@@ -315,7 +336,7 @@ class RecommendedTitleResponse(BaseModel):
     release_year: int | None = None
     runtime_minutes: int | None = None
     genres: list[str] = Field(default_factory=list)
-    poster_url: str | None = None
+    poster_url: CatalogueImageUrl = None
     imdb_score: float | None = None
 
     score: float

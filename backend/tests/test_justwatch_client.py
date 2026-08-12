@@ -888,3 +888,114 @@ class TestAnOfferWhosePlayLinkIsNotOne:
 
         assert entry.offers[0].url == "https://www.netflix.com/title/70264888"
         assert caplog.records == []
+
+
+class TestAnImageFromSomewhereElse:
+    """A poster and an icon are held to one host, not just to a scheme.
+
+    The library builds both by concatenating its own ``_IMAGES_URL`` onto a path
+    from the response, with nothing in between, so a field that opens with ``@``
+    or ``.`` moves the host somewhere else entirely while leaving a URL that
+    looks perfectly ordinary. An ``src`` needs no click, so the fetch itself
+    hands that host the viewer's address.
+
+    Note what the defaults in this module are: both fixtures already carry a
+    real-shaped ``images.justwatch.com`` URL, so every other test in this file
+    is also an assertion that ordinary images survive.
+    """
+
+    # What the library produces from a `posterUrl` of "@evil.test/x.jpg". Spelled
+    # as the built URL rather than as the path, because the built URL is what
+    # this code actually sees.
+    MOVED = "https://images.justwatch.com@evil.test/x.jpg"
+
+    def test_a_poster_from_another_host_is_dropped(self, clock: FakeClock):
+        client = build_client(RecordingCall([media_entry(poster=self.MOVED)]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.poster_url is None
+
+    def test_the_title_itself_is_kept(self, clock: FakeClock):
+        """Same reasoning as the offer above, and stronger. A title with no
+        poster is a card with a placeholder on it; a title dropped for its
+        poster is a film nobody can be recommended."""
+        client = build_client(RecordingCall([media_entry(poster=self.MOVED)]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.title == "Inception"
+        assert entry.node_id == "tm12345"
+
+    def test_a_provider_icon_from_another_host_is_dropped(self, clock: FakeClock):
+        client = build_client(
+            RecordingCall([]),
+            clock,
+            providers_fn=RecordingCall([offer_package(icon=self.MOVED)]),
+        )
+
+        [provider] = client.providers()
+
+        assert provider.icon_url is None
+        # The tile it draws is keyed by these, and a settings page that loses a
+        # service because its logo was wrong would be a worse bug than the logo.
+        assert provider.short_name == "nfx"
+        assert provider.name == "Netflix"
+
+    def test_an_absent_icon_becomes_null_rather_than_an_empty_string(
+        self, clock: FakeClock, caplog: pytest.LogCaptureFixture
+    ):
+        """The library returns "" for a package with no icon, not None -- so
+        without this the column would hold a blank string, and the frontend's
+        check for a missing icon happens to catch that only because "" is falsy
+        in both languages. Made explicit rather than left to luck.
+
+        And silently, which is the half a mutation probe caught missing: treating
+        "" as a value to complain about instead of an absence still stores null,
+        so nothing about the data looks wrong -- it just files a warning for
+        every service in the catalogue that has no logo, which is most of the
+        reason a log stops being read.
+        """
+        client = build_client(
+            RecordingCall([]), clock, providers_fn=RecordingCall([offer_package(icon="")])
+        )
+
+        with caplog.at_level(logging.WARNING):
+            [provider] = client.providers()
+
+        assert provider.icon_url is None
+        assert caplog.records == []
+
+    @pytest.mark.parametrize("field", ["poster", "icon"])
+    def test_it_says_which_image_it_threw_away(
+        self, field: str, clock: FakeClock, caplog: pytest.LogCaptureFixture
+    ):
+        """One warning per dropped value, carrying the value. A poster that
+        silently never appears is the kind of thing that gets blamed on the CDN
+        for a week."""
+        with caplog.at_level(logging.WARNING):
+            if field == "poster":
+                client = build_client(RecordingCall([media_entry(poster=self.MOVED)]), clock)
+                client.search("Inception")
+            else:
+                client = build_client(
+                    RecordingCall([]),
+                    clock,
+                    providers_fn=RecordingCall([offer_package(icon=self.MOVED)]),
+                )
+                client.providers()
+
+        assert any(self.MOVED in record.getMessage() for record in caplog.records)
+
+    def test_an_absent_poster_is_not_worth_a_warning(
+        self, clock: FakeClock, caplog: pytest.LogCaptureFixture
+    ):
+        """Plenty of real titles have no poster. Logging those would bury the
+        one line that matters in a pass over a few thousand rows."""
+        client = build_client(RecordingCall([media_entry(poster=None)]), clock)
+
+        with caplog.at_level(logging.WARNING):
+            [entry] = client.search("Inception")
+
+        assert entry.poster_url is None
+        assert caplog.records == []
