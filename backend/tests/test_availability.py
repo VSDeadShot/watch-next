@@ -179,3 +179,52 @@ class TestStaleness:
         """Clock skew between a server and a database should not cause a storm
         of refetching."""
         assert not is_stale(self.NOW + timedelta(hours=1), now=self.NOW, ttl=timedelta(days=7))
+
+
+class TestAHostileLinkOnAnOtherwiseGoodOffer:
+    """The URL is JustWatch's, and it goes straight into an `href`.
+
+    Dropped here rather than only at ingest, because the cache already holds
+    rows written before anything checked them -- and offers live for a week, so
+    trusting a refresh to clean them means a week of serving them. See
+    `core/urls` for what the check is and, more usefully, what it is not.
+    """
+
+    def test_the_offer_still_counts_as_watchable(self):
+        """The link is not what makes something watchable. Dropping the offer
+        would tell the user they cannot watch a thing they can."""
+        offers = [offer(NETFLIX, Monetization.FLATRATE, url="javascript:alert(1)")]
+
+        assert is_available(offers, subscriptions={NETFLIX})
+
+    def test_but_the_link_is_not_handed_out(self):
+        offers = [offer(NETFLIX, Monetization.FLATRATE, url="javascript:alert(1)")]
+
+        [option] = watch_options(offers, subscriptions={NETFLIX})
+
+        assert option.provider == NETFLIX
+        assert option.url is None
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "javascript:alert(1)",
+            "JavaScript:alert(1)",
+            "data:text/html,x",
+            "//evil.test",
+            "https://",
+        ],
+    )
+    def test_nothing_unfollowable_survives(self, url: str):
+        offers = [offer(NETFLIX, Monetization.FLATRATE, url=url)]
+
+        assert watch_options(offers, subscriptions={NETFLIX})[0].url is None
+
+    def test_an_ordinary_link_is_passed_through_untouched(self):
+        """The other half. A check that dropped everything would be noticed
+        only as posters and buttons quietly losing their links."""
+        offers = [offer(NETFLIX, Monetization.FLATRATE, url="https://netflix.com/title/1")]
+
+        assert (
+            watch_options(offers, subscriptions={NETFLIX})[0].url == "https://netflix.com/title/1"
+        )

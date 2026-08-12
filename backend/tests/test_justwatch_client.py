@@ -11,6 +11,7 @@ policy decisions, and policy that lives in a tested object is policy you can
 change on purpose.
 """
 
+import logging
 from datetime import UTC, datetime
 
 import httpx
@@ -829,3 +830,61 @@ class TestRateLimiting:
         client.search("Inception")
 
         assert sum(clock.slept) >= 2.0
+
+
+class TestAnOfferWhosePlayLinkIsNotOne:
+    """The deep link is JustWatch's string and ends up in an `href`.
+
+    Dropped at the boundary so the cache never holds one, which is a different
+    job from `core.availability` dropping it on the way out: that covers rows
+    written before this existed, this stops new ones arriving. Neither makes the
+    other redundant, and offers live for a week.
+    """
+
+    def test_the_link_is_dropped(self, clock: FakeClock):
+        hostile = offer(url="javascript:alert(1)")
+        client = build_client(RecordingCall([media_entry(offers=[hostile])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert entry.offers[0].url is None
+
+    def test_the_offer_itself_is_kept(self, clock: FakeClock):
+        """Availability is the valuable part and does not depend on the link.
+        Dropping the offer would make a watchable title look unwatchable, which
+        is the one failure this whole app is built to avoid."""
+        hostile = offer(url="javascript:alert(1)")
+        client = build_client(RecordingCall([media_entry(offers=[hostile])]), clock)
+
+        [entry] = client.search("Inception")
+
+        assert len(entry.offers) == 1
+        assert entry.offers[0].provider == "nfx"
+        assert entry.offers[0].monetization == "FLATRATE"
+
+    def test_it_says_so_rather_than_dropping_it_quietly(
+        self, clock: FakeClock, caplog: pytest.LogCaptureFixture
+    ):
+        """Same rule as every other thing this client declines: a value thrown
+        away without a word is a bug report nobody can act on."""
+        hostile = offer(url="javascript:alert(1)")
+        client = build_client(RecordingCall([media_entry(offers=[hostile])]), clock)
+
+        with caplog.at_level(logging.WARNING):
+            client.search("Inception")
+
+        assert any("javascript:alert(1)" in record.getMessage() for record in caplog.records)
+
+    def test_an_ordinary_link_is_kept_and_not_mentioned(
+        self, clock: FakeClock, caplog: pytest.LogCaptureFixture
+    ):
+        """The other half: a check that dropped everything would show up only
+        as every watch button quietly losing its link."""
+        good = offer(url="https://www.netflix.com/title/70264888")
+        client = build_client(RecordingCall([media_entry(offers=[good])]), clock)
+
+        with caplog.at_level(logging.WARNING):
+            [entry] = client.search("Inception")
+
+        assert entry.offers[0].url == "https://www.netflix.com/title/70264888"
+        assert caplog.records == []

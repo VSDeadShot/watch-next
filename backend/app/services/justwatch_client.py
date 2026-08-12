@@ -31,6 +31,7 @@ from simplejustwatchapi.exceptions import JustWatchError, JustWatchHttpError
 from simplejustwatchapi.tuples import MediaEntry, Offer, OfferPackage
 
 from app.core.matching import Candidate
+from app.core.urls import is_web_url
 
 _log = logging.getLogger(__name__)
 
@@ -464,12 +465,33 @@ def _to_offer_entry(offer: Offer) -> OfferEntry:
         # Blank rather than null: the offer cache deduplicates on this column,
         # and SQL does not consider two nulls equal.
         presentation=offer.presentation_type or "",
-        url=offer.url,
+        url=_play_link(offer.url),
         price_string=offer.price_string,
         price_value=offer.price_value,
         price_currency=offer.price_currency,
         available_to=_expiry(offer.available_to),
     )
+
+
+def _play_link(url: str | None) -> str | None:
+    """Keep the deep link only if it is somewhere a browser can be sent.
+
+    Only the link is dropped, never the offer: availability is the valuable
+    part and does not depend on having a link, so refusing the whole row would
+    make a watchable title look unwatchable -- the one failure this app exists
+    to avoid. The frontend already renders a plain label when there is nowhere
+    to send anybody.
+
+    Said out loud rather than dropped quietly, like every other thing this
+    module declines. `core.urls` explains what the check is worth and what it
+    is not; `core.availability` applies the same rule on the way out, for the
+    rows cached before this existed.
+    """
+    if url is None or is_web_url(url):
+        return url
+
+    _log.warning("dropping an unusable offer link from JustWatch: %r", url)
+    return None
 
 
 def _usable_offers(offers: list[Offer] | None) -> tuple[OfferEntry, ...]:

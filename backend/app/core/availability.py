@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
+from app.core.urls import is_web_url
+
 
 class Monetization(StrEnum):
     """How JustWatch says a title is paid for.
@@ -110,7 +112,12 @@ def watch_options(
             WatchOption(
                 provider=offer.provider,
                 monetization=monetization,
-                url=offer.url,
+                # Dropped rather than passed on, and only the link: an offer
+                # with an unusable URL still says the title is watchable, and
+                # refusing the whole offer would tell somebody they cannot
+                # watch a thing they can. The frontend already renders a plain
+                # label when there is nowhere to send them.
+                url=offer.url if is_web_url(offer.url) else None,
                 requires_subscription=monetization not in FREE_TO_EVERYONE,
             ),
         )

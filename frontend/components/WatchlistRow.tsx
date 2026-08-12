@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useEffect, useId, useRef, useState } from "react";
 import type { WatchlistItem } from "@/lib/types";
+import { webUrl } from "@/lib/urls";
 
 /**
  * One thing somebody meant to watch.
@@ -159,11 +160,15 @@ function Where({ item, seen }: { item: WatchlistItem; seen: boolean }) {
     ? `Watch on ${best.name}`
     : `Free on ${best.name}`;
 
+  // The backend drops an unusable link on the way out; this is the second of
+  // two checks rather than the only one. See lib/urls.
+  const href = webUrl(best.url);
+
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-      {best.url ? (
+      {href ? (
         <a
-          href={best.url}
+          href={href}
           target="_blank"
           rel="noreferrer noopener"
           className="border border-edge px-3 py-1.5 text-sm transition-colors hover:border-white hover:bg-raised"

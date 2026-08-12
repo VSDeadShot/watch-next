@@ -49,7 +49,8 @@ backend/          FastAPI + SQLAlchemy. Independent project, own pyproject.toml.
   scripts/        smoke_justwatch.py — manual live check, NOT part of the suite.
 frontend/         Next.js App Router + TypeScript + Tailwind 4. Independent project.
   app/            Routes.  components/  Flat, no subdirectories.
-  lib/            api.ts (the only fetch), types.ts (mirrors the schemas), format.ts.
+  lib/            api.ts (the only fetch), types.ts (mirrors the schemas),
+                  urls.ts (mirrors core/urls.py), format.ts.
 ```
 
 No root `package.json`. The two projects are built, tested and deployed separately.

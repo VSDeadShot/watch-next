@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import type { RecommendedTitle } from "@/lib/types";
+import { webUrl } from "@/lib/urls";
 
 /**
  * The answer. The only thing in this app allowed to be loud.
@@ -164,11 +165,14 @@ function WatchOn({ title }: { title: RecommendedTitle }) {
         const label = option.requires_subscription
           ? `Watch on ${option.name}`
           : `Free on ${option.name}`;
+        // The backend drops an unusable link on the way out, so this is the
+        // second of two checks rather than the only one. See lib/urls.
+        const href = webUrl(option.url);
 
-        return option.url ? (
+        return href ? (
           <a
             key={option.short_name}
-            href={option.url}
+            href={href}
             target="_blank"
             rel="noreferrer noopener"
             className="bg-white px-4 py-2 text-sm font-medium text-ink transition-opacity hover:opacity-90"
