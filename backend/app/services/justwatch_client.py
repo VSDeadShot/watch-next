@@ -433,18 +433,28 @@ def _usable(entries: list[MediaEntry], query: str) -> list[MediaEntry]:
     Neither defect is recoverable and neither is worth abandoning a search over,
     so the bad row goes and the good ones stay. Dropping silently would leave a
     title mysteriously unresolvable with nothing to explain why.
+
+    Says which defect it was and nothing else. The query is either a title out of
+    somebody's viewing history or something they typed, and the result's own
+    title is JustWatch's answer to that -- which for a search is mostly the same
+    string handed back, so logging it discloses the query by another route. What
+    the line is for is knowing which shape of malformed row to write a fixture
+    for, and the defect alone says that.
     """
     kept = []
     for entry in entries:
         if _is_usable(entry):
             kept.append(entry)
         else:
-            _log.warning(
-                "dropping an unusable JustWatch result for %r: id=%r title=%r",
-                query,
-                entry.entry_id,
-                entry.title,
+            missing = " and no ".join(
+                name
+                for name, present in (
+                    ("id", bool(entry.entry_id)),
+                    ("title", bool((entry.title or "").strip())),
+                )
+                if not present
             )
+            _log.warning("dropping a JustWatch result with no %s", missing)
     return kept
 
 

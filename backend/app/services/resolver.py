@@ -150,7 +150,30 @@ def resolve_library(
             # Contained on purpose: resolution walks a whole library, and losing
             # all of it to one dropped request would mean starting over. Nothing
             # is stored, so the title is asked about again next run.
-            _log.warning("could not search for %r", question.display_title, exc_info=True)
+            #
+            # The rows rather than the title. This walks a whole library, so a
+            # JustWatch outage writes one of these per title -- and on Render
+            # that is a good fraction of somebody's viewing history sitting in a
+            # platform log, outside the database it is supposed to live in, ready
+            # to be pasted into an issue on a public repository by whoever is
+            # debugging. Event ids say as much to anyone entitled to look them
+            # up and nothing at all to anyone else. `exc_info` is what actually
+            # diagnoses this line, and carries no title: the search term goes to
+            # JustWatch as a GraphQL variable, so the error names the endpoint.
+            #
+            # One id and a count, not the whole list. Every episode row of a
+            # series waits on the same question, so a 212-episode show put a
+            # 999-character line in the log -- measured -- and an outage does
+            # that once per show. One id is all a person needs to find the row;
+            # the count is what stops the line implying there was only one.
+            waiting = len(question.event_ids)
+            _log.warning(
+                "could not search for the title on %d watch event%s, one of them %r",
+                waiting,
+                "" if waiting == 1 else "s",
+                question.event_ids[0],
+                exc_info=True,
+            )
             summary = _counted(summary, searched=1, failed=1)
             continue
 

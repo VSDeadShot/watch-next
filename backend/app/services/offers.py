@@ -235,7 +235,13 @@ def refresh_stale_offers(
             # as it was and the title is tried again next time -- marking it
             # fetched here would buy it another week of being treated as known
             # when nothing was learned about it at all.
-            _log.warning("could not refresh availability for %r", title.jw_node_id, exc_info=True)
+            # Our own primary key, not the JustWatch node id. The node id is the
+            # weakest of the three things this app used to log about a title --
+            # it is JustWatch's own identifier, and discovery puts rows in this
+            # table nobody watched -- but it still says what is in somebody's
+            # catalogue, and it is resolvable by anybody with the same API. An
+            # id from our database says nothing outside it.
+            _log.warning("could not refresh availability for title %r", title.id, exc_info=True)
             summary = RefreshSummary(
                 refreshed=summary.refreshed,
                 failed=summary.failed + 1,
