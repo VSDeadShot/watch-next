@@ -38,6 +38,9 @@ DEPLOYED_URL = "postgresql+psycopg://user:pw@host/db"
 #: broken. Everything else is a bug if it is on this list.
 PUBLIC_BY_DESIGN = {"/health"}
 
+#: The page this app is served from, as the backend is told about it.
+FRONTEND = "http://localhost:3000"
+
 
 def routing_table(application: FastAPI) -> list[tuple[str, tuple[str, ...]]]:
     """Every route the app will actually match, as ``(path, methods)``.
@@ -193,6 +196,107 @@ class TestWhatTheGateDoesNotCover:
         """Render polls this to decide whether the service is up. Behind the
         gate, a healthy deployment would look permanently broken."""
         assert guarded.get("/health").status_code == 200
+
+
+class TestWhatTheBrowserIsTold:
+    """The CORS block, which is the other thing here that is not access control.
+
+    Worth being exact about how little it does. Every request the backend
+    actually receives arrives from ``app/api/[...path]/route.ts``, server-side,
+    and a server-side fetch sends no ``Origin`` header -- so the middleware
+    returns before it adds anything. That is the first test below, and it is the
+    one describing the real path.
+
+    The rest describe a path nothing in this app takes: `lib/api.ts` only ever
+    fetches its own origin, locally as well as deployed. They are here because
+    the headers still get emitted to anyone who asks with an ``Origin``, and
+    ``Access-Control-Allow-Credentials`` was among them -- sent to refused
+    origins too, since Starlette holds it in the unconditional header set while
+    only the origin echo is conditional. Nothing in this app has a credential a
+    browser could send: no cookie, no session, no basic auth. The one credential
+    is the ``X-API-Key`` the proxy holds on the server, which is not a thing CORS
+    has any say over. So the flag described a session model that never existed,
+    and these tests are what stops it coming back.
+    """
+
+    @pytest.fixture
+    def cors_app(self) -> Iterator[TestClient]:
+        """An app whose CORS block was built from a known origin.
+
+        Built with :func:`create_app` rather than by overriding
+        ``get_settings``, because middleware is configured once when the app is
+        constructed and an override arrives per request -- far too late to
+        decide what the middleware was told. Overriding it would leave these
+        tests answering to whatever ``FRONTEND_ORIGIN`` the developer happens to
+        have in ``backend/.env``.
+
+        The settings passed to :func:`create_app` decide the middleware; the
+        ones the *routes* see come from ``get_settings`` and are a separate
+        thing, so both are set here. Nothing below needs the second -- the two
+        routes used are ``/health``, which is public by design, and a preflight,
+        which the middleware answers itself before any route is reached. But a
+        test added to this class later would otherwise answer to whichever
+        ``API_SECRET`` the developer happens to have exported, and pass or fail
+        by machine.
+        """
+        deployed_settings = Settings(
+            frontend_origin=FRONTEND,
+            database_url=DEPLOYED_URL,
+            api_secret=SECRET,
+            jw_country="IN",
+            jw_language="en",
+        )
+        application = create_app(deployed_settings)
+        application.dependency_overrides[get_settings] = lambda: deployed_settings
+        with TestClient(application) as client:
+            yield client
+
+    def test_a_server_to_server_call_gets_no_cors_headers_at_all(self, cors_app: TestClient):
+        # The real path, and the reason the rest of this is inert. No `Origin`,
+        # so Starlette hands the request straight on.
+        response = cors_app.get("/health")
+        assert [name for name in response.headers if name.startswith("access-control")] == []
+
+    def test_the_page_the_app_is_served_from_may_read_the_answer(self, cors_app: TestClient):
+        # Echoed rather than `*`, which is what the middleware is still here for.
+        response = cors_app.get("/health", headers={"Origin": FRONTEND})
+        assert response.headers["access-control-allow-origin"] == FRONTEND
+
+    def test_any_other_page_may_not(self, cors_app: TestClient):
+        response = cors_app.get("/health", headers={"Origin": "https://evil.test"})
+        assert "access-control-allow-origin" not in response.headers
+
+    @pytest.mark.parametrize("origin", [FRONTEND, "https://evil.test"])
+    def test_no_response_claims_a_credential_can_be_sent(self, cors_app: TestClient, origin: str):
+        # Both origins, because this header went out regardless of whether the
+        # origin was allowed -- so testing only the allowed one would miss most
+        # of the requests that used to receive it.
+        response = cors_app.get("/health", headers={"Origin": origin})
+        assert "access-control-allow-credentials" not in response.headers
+
+    @pytest.mark.parametrize("origin", [FRONTEND, "https://evil.test"])
+    def test_no_preflight_claims_one_either(self, cors_app: TestClient, origin: str):
+        # A separate header set in Starlette, built at construction time, so it
+        # is a separate assertion rather than the same one twice.
+        response = cors_app.options(
+            "/api/stats",
+            headers={"Origin": origin, "Access-Control-Request-Method": "POST"},
+        )
+        assert "access-control-allow-credentials" not in response.headers
+
+    def test_a_preflight_from_that_page_still_succeeds(self, cors_app: TestClient):
+        # The check that the removal took a claim away and not the policy. A
+        # cross-origin POST is refused before it is sent if this stops being 200.
+        response = cors_app.options(
+            "/api/stats",
+            headers={
+                "Origin": FRONTEND,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "x-api-key",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == FRONTEND
 
 
 class TestDecidingWhetherAGateIsRequired:

@@ -65,10 +65,31 @@ def create_app(settings: Settings) -> FastAPI:
         **_reference_urls(gate),
     )
 
+    # Inert in every request this app actually makes, and kept anyway. The
+    # browser talks only to its own origin -- `frontend/lib/api.ts` fetches
+    # relative paths and `app/api/[...path]/route.ts` forwards them from the
+    # server -- and a server-side fetch sends no `Origin`, so the middleware
+    # hands the request straight on without adding a header. Which also means
+    # Vercel previews need no listing here: they proxy server-side too.
+    #
+    # No `allow_credentials`. It advertises that a browser may attach a
+    # credential to a cross-origin call, and there is none to attach: no cookie,
+    # no session, no basic auth. The only credential is the `X-API-Key` the proxy
+    # holds server-side, which CORS has no say over -- so the flag described a
+    # session model this app has never had. Starlette also sent that header to
+    # origins it had just refused, holding it in the unconditional set while only
+    # the origin echo is conditional, so the claim went to anybody who asked.
+    #
+    # The origin is still named, because the alternative to naming one is `*`,
+    # and `*` here would be a promise to every page on the internet that it may
+    # read a viewing history the moment the gate is ever waived. Dropping the
+    # flag weakens that misconfiguration too, as it happens: Starlette upgrades
+    # `*` into an echo of whatever origin asked when credentials are allowed,
+    # which is the one form of wildcard a browser honours for a credentialed
+    # read. Without it, `*` is only the ordinary toothless kind.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.frontend_origin],
-        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
