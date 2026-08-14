@@ -81,7 +81,7 @@ Always use the venv interpreter — **not** the system Python.
 
 ```bash
 # Backend, from backend/
-./.venv/Scripts/python.exe -m pytest                    # 945 tests, all offline
+./.venv/Scripts/python.exe -m pytest                    # 1275 tests, all offline
 ./.venv/Scripts/python.exe -m ruff check .
 ./.venv/Scripts/python.exe -m ruff format --check .
 ./.venv/Scripts/alembic.exe upgrade head                # before first run, and after pulling
@@ -212,8 +212,12 @@ API tests use `TestClient` with `get_db` and `get_settings` overridden in a fixt
   is not running), because the fixes differ, and it reads FastAPI's `detail` in both its
   string and its validation-list shapes. Never call `fetch` directly.
 - **`lib/types.ts` mirrors the Pydantic schemas by hand.** Change one, change the other.
-- **`NEXT_PUBLIC_API_BASE_URL` is baked into the client bundle at build time.** Nothing
-  secret may ever go in `frontend/.env.example` or `.env.local`.
+- **No `NEXT_PUBLIC_` variable exists here, and none may be added.** That prefix means
+  "compile this into the bundle the browser downloads", which is the opposite of what
+  every value in `frontend/.env.example` needs. `app/api/[...path]/route.ts` forwards
+  each `/api/*` call and holds the backend key server-side, so `API_BASE_URL` is read at
+  request time — moving the backend needs no rebuild, and the browser only ever talks to
+  this app's own origin.
 - **Components are flat** in `components/`, with no subdirectories.
 - **Six routes**: `/` (the answer), `/watchlist`, `/stats`, `/import`, `/settings` and
   `/resolve`. The first five are the nav; `/resolve` deliberately is not. It is a chore
