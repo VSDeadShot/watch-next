@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { megabytes } from "@/lib/limits";
 
 /**
  * Where the export file goes in.
@@ -16,11 +17,16 @@ export default function ImportDropzone({
   busy,
   accept,
   hint,
+  limit,
 }: {
   onFile: (file: File) => void;
   busy: boolean;
   accept: string;
   hint: string;
+  /** Stated up front where there is one, so the ceiling is something a person
+   *  reads before choosing a file rather than after being refused one. Null
+   *  where nothing the frontend knows about would stop an upload. */
+  limit: number | null;
 }) {
   const [over, setOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -95,6 +101,20 @@ export default function ImportDropzone({
         </span>
 
         <span className="text-sm text-dim">{hint}</span>
+
+        {/* Short on purpose. The full explanation belongs in the refusal, which
+            is where somebody is actually asking why; a paragraph here would
+            wrap to three lines on a phone to pre-empt a question nobody has
+            yet. "The host's" is the part that has to survive the trim, because
+            it is what stops the number reading as an app limit.
+
+            One template literal rather than text around an expression, because
+            JSX dropped the space before the dash and rendered "4.5 MB— the". */}
+        {limit !== null && (
+          <span className="text-xs text-dim">
+            {`Up to ${megabytes(limit)} — the host’s limit, not the app’s`}
+          </span>
+        )}
       </label>
     </div>
   );

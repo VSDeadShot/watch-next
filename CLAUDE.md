@@ -272,3 +272,15 @@ JustWatch data comes from an unofficial community wrapper whose terms permit
   once rather than one at a time.
 - A watch event whose title was never resolved cannot exclude anything from the pool. The
   fix is resolving the row, not guessing here.
+- **Deployed, an import is capped at 4.5 MB by Vercel, not by this app.** Measured: a
+  4,000 KiB body reached `proxy.ts` and got its 401, a 4,500 KiB body got `413
+  FUNCTION_PAYLOAD_TOO_LARGE` without the auth gate being consulted — the platform
+  refuses the body before any code here runs, so `MAX_UPLOAD_BYTES` (32 MB) and the
+  backend's own 413 are both unreachable through the browser. `lib/limits.ts` reads the
+  ceiling on the server and `/import` refuses an oversized file itself, because the
+  alternative is Vercel's plain-text page rendering as the bare line `413 Request Entity
+  Too Large`. This bites the YouTube import hardest: it has no cap on purpose, since it
+  streams with `ijson` and holds nothing, and a real `watch-history.json` is tens to
+  hundreds of megabytes. Lifting it means chunked upload or a signed one-time URL —
+  never posting straight to the backend from the browser, which would put the API key in
+  the bundle and is the thing the proxy exists to prevent.
