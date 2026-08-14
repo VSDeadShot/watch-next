@@ -143,7 +143,7 @@ POST   /api/imports/netflix           multipart; the raw Takeout .zip or a bare 
 POST   /api/imports/youtube           multipart; watch-history.json, streamed with ijson
 POST   /api/titles/resolve            resolve distinct titles against JustWatch; ?limit=
 GET    /api/titles/unresolved         what the matcher declined, worst first; ?limit=&offset=
-GET    /api/titles/search             free catalogue search; ?q= (>=2 chars), optional ?kind=
+POST   /api/titles/search             free catalogue search; body {q (>=2 chars), kind?}
 GET    /api/titles/resolutions        the recently decided-by-hand, newest first
 PUT    /api/titles/resolutions/{id}   decide one by hand
 GET    /api/providers                 the catalogue for the country
@@ -167,7 +167,9 @@ another batch. **A batch whose every search failed does not reduce `remaining`**
 caller must stop on `failed == searched` too, or it will loop for as long as JustWatch is
 down. `search` exists for the case the matcher could never have got right — a misspelled
 export, a regional name — and runs only when asked, never per keystroke, because every
-call is a real request against an API we pace at one a second by choice.
+call is a real request against an API we pace at one a second by choice. **It is a POST
+for what is plainly a read**, because the term is a title out of somebody's history and a
+query string is copied into an access log by everything the request passes through.
 
 ## Testing
 

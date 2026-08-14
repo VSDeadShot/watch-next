@@ -357,8 +357,20 @@ class TestPagingTheQueue:
 
 
 class TestSearchingTheCatalogue:
+    """A POST for a read, because the term is somebody's viewing history.
+
+    A query string is written down by everything it passes through: uvicorn's
+    access log records the whole request line, and the Vercel proxy hop records
+    the same one again. A body is not, so the term stays in the request.
+    """
+
+    def test_the_term_cannot_be_put_in_the_url(self, client: TestClient):
+        # The point of the change, and the only test that would fail if somebody
+        # added the GET back "for convenience".
+        assert client.get(SEARCH, params={"q": "Dune"}).status_code == 405
+
     def test_finds_what_was_typed(self, client: TestClient):
-        body = client.get(SEARCH, params={"q": "Dune"}).json()
+        body = client.post(SEARCH, json={"q": "Dune"}).json()
 
         assert [row["node_id"] for row in body] == ["tm84", "tm21"]
         assert body[0]["release_year"] == 1984
@@ -368,32 +380,32 @@ class TestSearchingTheCatalogue:
     ):
         """The whole point: the exported spelling is what failed, so the search
         has to run on what the person typed instead."""
-        client.get(SEARCH, params={"q": "Dune"})
+        client.post(SEARCH, json={"q": "Dune"})
 
         assert catalogue.searched == ["Dune"]
 
     def test_narrows_to_films_when_asked(self, client: TestClient, catalogue: FakeCatalogue):
-        client.get(SEARCH, params={"q": "Dune", "kind": "movie"})
+        client.post(SEARCH, json={"q": "Dune", "kind": "movie"})
 
         assert catalogue.search_types == [("MOVIE",)]
 
     def test_narrows_to_series_for_an_episode(self, client: TestClient, catalogue: FakeCatalogue):
-        client.get(SEARCH, params={"q": "Dune", "kind": "episode"})
+        client.post(SEARCH, json={"q": "Dune", "kind": "episode"})
 
         assert catalogue.search_types == [("SHOW",)]
 
     def test_narrows_nothing_by_default(self, client: TestClient, catalogue: FakeCatalogue):
-        client.get(SEARCH, params={"q": "Dune"})
+        client.post(SEARCH, json={"q": "Dune"})
 
         assert catalogue.search_types == [None]
 
     def test_a_kind_that_is_not_one_of_ours_is_rejected(self, client: TestClient):
-        assert client.get(SEARCH, params={"q": "Dune", "kind": "show"}).status_code == 422
+        assert client.post(SEARCH, json={"q": "Dune", "kind": "show"}).status_code == 422
 
     def test_a_single_letter_is_rejected_before_it_costs_a_request(
         self, client: TestClient, catalogue: FakeCatalogue
     ):
-        response = client.get(SEARCH, params={"q": "D"})
+        response = client.post(SEARCH, json={"q": "D"})
 
         assert response.status_code == 422
         assert catalogue.searched == []
@@ -403,7 +415,23 @@ class TestSearchingTheCatalogue:
     ):
         """Long enough to pass a length check and still not a search. The rate
         limit is a second a request whatever is in the box."""
-        response = client.get(SEARCH, params={"q": "   "})
+        response = client.post(SEARCH, json={"q": "   "})
+
+        assert response.status_code == 422
+        assert catalogue.searched == []
+
+    def test_a_term_longer_than_any_title_is_rejected(
+        self, client: TestClient, catalogue: FakeCatalogue
+    ):
+        """The ceiling a URL provided by accident, now stated on purpose.
+
+        A request line has one the server chose -- measured at roughly 65,500
+        characters, above which uvicorn answers 400 without the app hearing
+        about it -- and a JSON body has none at all. Moving the term into the
+        body removed that limit, so this puts one back at a size an actual
+        title fits inside.
+        """
+        response = client.post(SEARCH, json={"q": "x" * 5000})
 
         assert response.status_code == 422
         assert catalogue.searched == []
@@ -411,7 +439,7 @@ class TestSearchingTheCatalogue:
     def test_the_words_are_trimmed_before_being_asked_about(
         self, client: TestClient, catalogue: FakeCatalogue
     ):
-        client.get(SEARCH, params={"q": "  Dune  "})
+        client.post(SEARCH, json={"q": "  Dune  "})
 
         assert catalogue.searched == ["Dune"]
 
@@ -420,7 +448,7 @@ class TestSearchingTheCatalogue:
     ):
         catalogue.results["Dune"] = JustWatchHttpError(503, "unavailable")
 
-        response = client.get(SEARCH, params={"q": "Dune"})
+        response = client.post(SEARCH, json={"q": "Dune"})
 
         assert response.status_code == 502
         assert "try again" in response.json()["detail"]
@@ -428,7 +456,7 @@ class TestSearchingTheCatalogue:
     def test_finding_nothing_is_an_empty_list_rather_than_a_404(self, client: TestClient):
         """A search that matched nothing is a real answer, and the fix is to
         type something else rather than to treat the route as broken."""
-        response = client.get(SEARCH, params={"q": "Nothing By This Name"})
+        response = client.post(SEARCH, json={"q": "Nothing By This Name"})
 
         assert response.status_code == 200
         assert response.json() == []

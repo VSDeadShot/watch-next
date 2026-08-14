@@ -10,8 +10,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from simplejustwatchapi.exceptions import JustWatchApiError, JustWatchError
 
 from app.api.deps import CatalogueDep, SessionDep, UserDep
-from app.core.title_parser import TitleKind
 from app.schemas import (
+    CatalogueSearchRequest,
     ManualResolutionRequest,
     ManualResolutionResponse,
     ResolvedTitleResponse,
@@ -33,10 +33,6 @@ from app.services.resolver import (
 from app.services.single_flight import PassAlreadyRunning
 
 router = APIRouter(prefix="/api/titles", tags=["titles"])
-
-# The shortest search worth spending a request on. Anything below this cannot
-# narrow the catalogue and still costs the same second of the rate limit.
-MINIMUM_SEARCH_LENGTH = 2
 
 
 @router.post("/resolve", response_model=ResolveSummaryResponse)
@@ -116,37 +112,22 @@ def unresolved(
     )
 
 
-@router.get("/search", response_model=list[TitleCandidate])
-def search(
-    catalogue: CatalogueDep,
-    q: str = Query(min_length=MINIMUM_SEARCH_LENGTH),
-    kind: TitleKind | None = None,
-) -> list[TitleCandidate]:
+@router.post("/search", response_model=list[TitleCandidate])
+def search(body: CatalogueSearchRequest, catalogue: CatalogueDep) -> list[TitleCandidate]:
     """Look the catalogue up by a name somebody typed.
 
     The way out when the stored candidates are no help, which is the case the
     matcher could never have got right on its own: a title misspelled in the
     export, or one known by a different name in this country.
 
-    Args:
-        q: at least two characters once trimmed. A single letter costs a request
-            against a rate-limited API and cannot narrow anything -- and neither
-            can a box someone left holding spaces, which is why the length is
-            checked after stripping rather than by the validator alone.
-        kind: narrow to films or to series. Omitted means neither, and that is
-            the honest default -- the parser's reading of a title is itself a
-            common reason a row needed fixing, so a filter taken from that same
-            reading is exactly what would hide the right answer.
+    A POST because the term goes in the body, not because anything is written:
+    what somebody types here is a title they watched, and a query string is the
+    one part of a request that every log along the way keeps a copy of. The
+    schema holds the rest of the rule -- trimmed, and long enough to be worth a
+    request against an API paced at one a second.
     """
-    query = q.strip()
-    if len(query) < MINIMUM_SEARCH_LENGTH:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"search for at least {MINIMUM_SEARCH_LENGTH} characters",
-        )
-
     try:
-        found = search_candidates(catalogue, query, kind=kind)
+        found = search_candidates(catalogue, body.q, kind=body.kind)
     except JustWatchApiError as error:
         # The API answered, and the answer was unusable. Nothing to retry.
         raise HTTPException(

@@ -14,6 +14,12 @@ diagnostically here, because these failures are network failures -- the
 exception says how it failed, the summary counts say how many, and the title is
 one query away for whoever is entitled to run it.
 
+The last class here is the same rule applied to the logs this app does not
+write. A URL is recorded in full by uvicorn's access log and again by the proxy
+in front of it, so a title in a query string ends up filed by two platforms
+whose retention nobody here chose -- which is why the catalogue search takes its
+term in a body and is a POST for what is plainly a read.
+
 One file for a rule that spans three modules, rather than a test in each, for
 the same reason ``test_api_security.py`` and ``test_schema_images.py`` are one
 file each: the rule is the thing being described, and split across three modules
@@ -34,9 +40,11 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from simplejustwatchapi.exceptions import JustWatchHttpError
 from sqlalchemy.orm import Session
 
+from app.main import app as served_app
 from app.models import Title
 from app.services.justwatch_client import _usable
 from app.services.offers import refresh_stale_offers
@@ -241,6 +249,7 @@ class TestTheExceptionDetailIsSafeToKeep:
 #: either be argued with or quietly widened until it caught nothing.
 PERSONAL_NAMES = frozenset(
     {
+        "q",
         "display_title",
         "raw_title",
         "query_title",
@@ -373,3 +382,67 @@ class TestNoOtherLogLineSaysMore:
                 path.read_text(encoding="utf-8"), str(path.relative_to(APP.parent))
             )
         assert offenders == []
+
+
+def url_parameters(application: FastAPI) -> list[str]:
+    """Every value a caller is invited to put in a URL, as ``METHOD path: name``.
+
+    Read off the OpenAPI document rather than the source, because that document
+    is FastAPI's own account of what it will accept -- a route's signature can
+    say ``str`` and still be a query parameter, a body, or a dependency
+    depending on what wraps it, and only the resolved schema knows which.
+    """
+    return [
+        f"{method.upper()} {path}: {parameter['name']}"
+        for path, operations in application.openapi()["paths"].items()
+        for method, operation in operations.items()
+        for parameter in operation.get("parameters", [])
+        if parameter["in"] in {"query", "path"}
+    ]
+
+
+def personal_parameters(application: FastAPI) -> list[str]:
+    """The ones among those that would put somebody's data in a URL."""
+    return [
+        parameter
+        for parameter in url_parameters(application)
+        if parameter.rsplit(": ", 1)[-1] in PERSONAL_NAMES
+    ]
+
+
+class TestNothingPersonalTravelsInAUrl:
+    """The other half of the same rule, for the log this app does not own.
+
+    A log line is something we write; a URL is something written for us. uvicorn
+    records the whole request line, access log included, and the proxy in front
+    of it records the same line again -- so a title in a query string is filed
+    twice over by two platforms whose retention nobody here chose. That is why
+    the catalogue search is a POST for what is obviously a read.
+
+    Path parameters count as well as query ones. They are the same part of the
+    request as far as any of those logs are concerned; the reason no rule is
+    broken by ``/watchlist/{title_id}`` is that an id is a reference, exactly as
+    it is in a log line.
+    """
+
+    def test_the_sweep_finds_the_parameters_that_are_there(self):
+        # Same trap as the log sweep: one that matched nothing would pass the
+        # test below forever while checking nothing.
+        found = url_parameters(served_app)
+
+        assert "GET /api/titles/unresolved: limit" in found
+        assert "PATCH /api/watchlist/{title_id}: title_id" in found
+
+    def test_it_would_notice_a_search_term_back_in_the_url(self):
+        # The route as it was written before this change, added to a throwaway
+        # app so the check's teeth are demonstrated rather than assumed.
+        relapsed = FastAPI()
+
+        @relapsed.get("/api/titles/search")
+        def search(q: str) -> list[str]:  # pragma: no cover - never called
+            return []
+
+        assert personal_parameters(relapsed) == ["GET /api/titles/search: q"]
+
+    def test_no_route_asks_for_anything_personal_in_a_url(self):
+        assert personal_parameters(served_app) == []

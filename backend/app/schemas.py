@@ -7,6 +7,7 @@ from pydantic import AfterValidator, BaseModel, Field
 
 from app.core.moods import Mood
 from app.core.scoring import KindPreference
+from app.core.title_parser import TitleKind
 from app.core.urls import is_catalogue_image_url
 
 # Long enough for a reason somebody typed, short enough that the column cannot
@@ -101,6 +102,54 @@ class RefreshSummaryResponse(BaseModel):
     # A caller must stop on every request failing too, or it will loop for as
     # long as JustWatch is down.
     remaining: int = 0
+
+
+#: The shortest search worth spending a request on. Anything below this cannot
+#: narrow the catalogue and still costs the same second of the rate limit.
+MINIMUM_SEARCH_LENGTH = 2
+
+#: The longest. Comfortably past the longest title anybody has released and
+#: nowhere near a body somebody would send to see what happens.
+#:
+#: Stated because moving the term out of the URL took away a ceiling that was
+#: there by accident: a request line has one the server picked -- measured at
+#: about 65,500 characters, beyond which uvicorn answers 400 on its own -- and a
+#: JSON body has none, so without this a search became an unbounded string
+#: handed to a rate-limited API.
+SEARCH_TERM_LIMIT = 200
+
+
+def _a_term_worth_searching_for(value: str) -> str:
+    # Trimmed and checked in one place, because the two have to happen in that
+    # order: a box holding three spaces passes any length check and is still not
+    # a search. Returning the trimmed value means the route cannot forget to.
+    term = value.strip()
+    if len(term) < MINIMUM_SEARCH_LENGTH:
+        raise ValueError(f"search for at least {MINIMUM_SEARCH_LENGTH} characters")
+    return term
+
+
+class CatalogueSearchRequest(BaseModel):
+    """A name somebody typed, and how much of the catalogue to look in.
+
+    A body rather than a query string, which is why this route is a POST for
+    what is plainly a read. The term is a title out of somebody's viewing
+    history, and a URL is written down by everything it passes through --
+    uvicorn's access log records the whole request line, the proxy hop in front
+    of it records the same line again, and neither is a place this app gets to
+    decide the retention of. A body travels in none of them.
+    """
+
+    # The length is capped before the validator runs, so an enormous body is
+    # refused rather than trimmed and measured first.
+    q: Annotated[
+        str, Field(max_length=SEARCH_TERM_LIMIT), AfterValidator(_a_term_worth_searching_for)
+    ]
+    # Narrow to films or to series. Omitted means neither, and that is the
+    # honest default -- the parser's reading of a title is itself a common
+    # reason a row needed fixing, so a filter taken from that same reading is
+    # exactly what would hide the right answer.
+    kind: TitleKind | None = None
 
 
 class TitleCandidate(BaseModel):

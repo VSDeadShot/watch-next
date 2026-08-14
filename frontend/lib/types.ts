@@ -272,6 +272,19 @@ export interface TitleCandidate {
   release_year: number | null;
 }
 
+/** `POST /api/titles/search` -- a name somebody typed, in the body.
+ *
+ *  A POST for what is plainly a read, and the body is the reason: the term is a
+ *  title out of somebody's viewing history, and a query string is written down
+ *  in full by every log the request passes through on its way to the backend. */
+export interface CatalogueSearchBody {
+  /** At least two characters once trimmed. */
+  q: string;
+  /** Omitted means neither -- the parser's reading of a title is itself a
+   *  common reason a row needs fixing, so filtering by it hides the answer. */
+  kind?: string;
+}
+
 /** `POST /api/titles/resolve` -- what one batch of matching did. */
 export interface ResolveSummary {
   searched: number;

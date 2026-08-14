@@ -2,7 +2,7 @@
 
 import { useId, useState } from "react";
 import { apiRequest, errorMessage } from "@/lib/api";
-import type { TitleCandidate } from "@/lib/types";
+import type { CatalogueSearchBody, TitleCandidate } from "@/lib/types";
 
 /**
  * Choosing which catalogue entry a title actually is.
@@ -67,11 +67,16 @@ export default function CandidatePicker({
     setSearching(true);
     setError(null);
     try {
-      const found = await apiRequest<TitleCandidate[]>(
-        `/api/titles/search?q=${encodeURIComponent(wanted)}${
-          narrow ? `&kind=${encodeURIComponent(kind)}` : ""
-        }`,
-      );
+      // The term goes in the body, which is why a read is a POST here: what
+      // gets typed into this box is a title somebody watched, and a query
+      // string is copied into an access log by everything it passes through.
+      const body: CatalogueSearchBody = narrow
+        ? { q: wanted, kind }
+        : { q: wanted };
+      const found = await apiRequest<TitleCandidate[]>("/api/titles/search", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
       setResults(found);
     } catch (caught) {
       setError(errorMessage(caught));
@@ -119,6 +124,9 @@ export default function CandidatePicker({
             id={fieldId}
             type="search"
             value={query}
+            // Mirrors `SEARCH_TERM_LIMIT`, so the field stops where the API
+            // does instead of letting somebody type into a 422.
+            maxLength={200}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Another name"
             autoFocus={candidates.length > 0}
