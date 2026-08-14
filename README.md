@@ -55,7 +55,7 @@ None of these is a preference, and none gets quietly relaxed to make a feature e
 Everything genuinely interesting — title parsing, fuzzy matching, the taste profile, mood
 weights, scoring, the availability rule — lives in `backend/app/core/`, which imports no
 FastAPI, no SQLAlchemy, no network and no clock. It is testable as plain functions. The
-test suite is 993 tests and none of them touch the network.
+test suite is 1,275 tests and none of them touch the network.
 
 ## Local development
 
@@ -106,8 +106,13 @@ Roughly in order, the first time:
 ## Deploying it
 
 The backend runs anywhere that can run a container or a Python process; the frontend is a
-standard Next.js app. Two things are worth knowing:
+standard Next.js app. Four things are worth knowing:
 
+- **Set `WATCH_NEXT_USER` and `WATCH_NEXT_PASSWORD`.** They are the Basic-auth credential
+  that gates the whole site rather than just the API, and a production build with them
+  unset answers **503 to everything** rather than serving your history openly. `next dev`
+  ignores them, so a fresh checkout needs neither. There is no lockout behind this, so make
+  the password long and random.
 - **Set `API_SECRET`.** This app has one user and no login, which was the right shape for
   something that only ever answered on localhost. Deployed, that shape means whoever has
   the URL can read your viewing history, rewrite which services you pay for, and spend a
@@ -117,6 +122,13 @@ standard Next.js app. Two things are worth knowing:
   so platform health checks still work.
 - **Run one backend process.** JustWatch calls are paced per process, so a second worker
   would double the request rate this project has chosen to keep.
+- **Check what your host does to an upload.** On Vercel a request body over 4.5 MB is
+  refused with a 413 before any of this app's code runs — measured, and upstream even of
+  the password prompt above. The import page reads that ceiling from the platform and
+  refuses an oversized file itself, with a message saying whose limit it is, because the
+  alternative is the host's own error page. It matters most for the YouTube export: a real
+  `watch-history.json` is far larger than that, and there is no smaller version of it to
+  send. `CLAUDE.md` records the measurement and the two ways out.
 
 Both `.env.example` files document every variable and why it exists.
 
